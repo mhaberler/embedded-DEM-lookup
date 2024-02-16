@@ -1,5 +1,5 @@
 #pragma once
-#include <math.h>
+
 #include <stdint.h>
 
 static inline double to_radians(double degrees) {

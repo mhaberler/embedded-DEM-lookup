@@ -4,6 +4,8 @@
 #include <sqlite3.h>
 #include <vector>
 
+
+
 #define TILE_SIZE 256 // FIXME should come from mbtiles
 
 #ifndef TILECACHE_SIZE

@@ -36,8 +36,6 @@
 .vscode
 
 untracked
-data/mbtiles/DTMAT_rgb_z10-16.mbtiles
-data/mbtiles/DTMAT_rgb_z14.mbtiles
 *.db
 
 

@@ -1,11 +1,15 @@
+#include <Arduino.h>
+
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <math.h>
-#include <M5Unified.h>
 #include <PNGdec.h>
+
+#include "logging.hpp"
 #include "mbtiles.hpp"
-#include "mercmath.hpp"
+#include "slippytiles.hpp"
+
 
 static const char *tileQuery = "SELECT tile_data FROM tiles WHERE"
                                " zoom_level = ? AND tile_column = ? AND tile_row = ?";
@@ -21,6 +25,8 @@ static PNG png;
 static std::vector<demInfo_t *> dems;
 static uint8_t dbindex;
 
+
+
 int getBBox(sqlite3 *db, demInfo_t *di) {
     sqlite3_stmt* stmt = nullptr;
     int maxZoom = -1;
@@ -35,9 +41,9 @@ int getBBox(sqlite3 *db, demInfo_t *di) {
     if (rc == SQLITE_ROW) {
         maxZoom = sqlite3_column_int(stmt, 0);
         di->maxZoom = maxZoom;
-        log_d("maxzoom: %d", maxZoom);
+        LOG_DEBUG("maxzoom: %d", maxZoom);
     } else {
-        log_d("maxzoom query failed %d", sqlite3_column_int(stmt, 0));
+        LOG_ERROR("maxzoom query failed %d", sqlite3_column_int(stmt, 0));
         sqlite3_finalize(stmt);
         return rc;
     }
@@ -51,9 +57,9 @@ int getBBox(sqlite3 *db, demInfo_t *di) {
         tc_max = sqlite3_column_int(stmt, 1);
         tr_min = sqlite3_column_int(stmt, 2);
         tr_max = sqlite3_column_int(stmt, 3);
-        log_d("col %d..%d row %d..%d", tc_min, tc_max, tr_min, tr_max);
+        LOG_DEBUG("col %d..%d row %d..%d", tc_min, tc_max, tr_min, tr_max);
     } else {
-        log_d("bboxQuery query failed %d", sqlite3_column_int(stmt, 0));
+        LOG_ERROR("bboxQuery query failed %d", sqlite3_column_int(stmt, 0));
         sqlite3_finalize(stmt);
         return rc;
     }
@@ -65,7 +71,7 @@ int getBBox(sqlite3 *db, demInfo_t *di) {
     di->bbox.tr_lon = tilex2long(tc_max, maxZoom);
     di->index = ++dbindex;
 
-    log_d("bbox %.4f %.4f %.4f %.4f",
+    LOG_DEBUG("bbox %F %F %F %F",
           di->bbox.ll_lat, di->bbox.tr_lat,
           di->bbox.ll_lon, di->bbox.tr_lon);
     return SQLITE_OK;
@@ -75,14 +81,14 @@ int addMBTiles(const char *path, demInfo_t **demInfo) {
     demInfo_t *di = new demInfo_t();
     int rc = sqlite3_open(path, &di->db);
     if (rc != SQLITE_OK) {
-        log_d("Can't open database %s: rc=%d %s", path, rc, sqlite3_errmsg(di->db));
+        LOG_ERROR("Can't open database %s: rc=%d %s", path, rc, sqlite3_errmsg(di->db));
         delete di;
         return rc;
     }
     // retrieve bbox
     rc = getBBox(di->db, di);
     if (rc != SQLITE_OK) {
-        log_d("bbox query failed %s: rc=%d %s", path, rc, sqlite3_errmsg(di->db));
+        LOG_DEBUG("bbox query failed %s: rc=%d %s", path, rc, sqlite3_errmsg(di->db));
         di->db_errors++;
         delete di;
         return rc;
@@ -109,13 +115,13 @@ std::string keyStr(uint64_t key) {
 
 void printCache(void) {
     for (auto item: tile_cache.items()) {
-        log_e("%s", keyStr(item.first).c_str());
+        LOG_INFO("%s", keyStr(item.first).c_str());
     }
 }
 
 void printDems(void) {
     for (auto d: dems) {
-        log_e("dem %d: %s bbx=%.2f/%.2f..%.2f/%.2f dberr=%d tile_err=%d hits=%d misses=%d",
+        LOG_INFO("dem %d: %s bbx=%F/%F..%F/%F dberr=%d tile_err=%d hits=%d misses=%d",
               d->index, d->path,d->bbox.ll_lat,d->bbox.ll_lon, d->bbox.tr_lat,d->bbox.tr_lon,
               d->db_errors, d->tile_errors, d->cache_hits, d->cache_misses);
     }
@@ -130,7 +136,7 @@ void freeTile(rgbaTile_t *tile) {
 }
 
 static void evictTile(uint64_t key, rgbaTile_t *t) {
-    log_d("evict %s %p",keyStr(key).c_str(), t);
+    LOG_DEBUG("evict %s",keyStr(key).c_str());
     if (t != NULL) {
         if ( t->buffer != NULL)
             heap_caps_free(t->buffer);
@@ -152,7 +158,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
     key.entry.z = di->maxZoom;
 
     if (!tile_cache.exists(key.key)) {
-        log_d("cache entry %s not found", keyStr(key.key).c_str());
+        LOG_DEBUG("cache entry %s not found", keyStr(key.key).c_str());
         di->cache_misses++;
 
         // fetch the missing tile
@@ -193,7 +199,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
         }
         sqlite3_finalize(stmt);
     } else {
-        log_d("cache entry %s found: ", keyStr(key.key).c_str());
+        LOG_DEBUG("cache entry %s found: ", keyStr(key.key).c_str());
         tile = tile_cache.get(key.key);
         locinfo->status = LS_VALID;
         di->cache_hits++;
@@ -212,7 +218,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
 int getLocInfo(double lat, double lon, locInfo_t *locinfo) {
     for (auto di: dems) {
         if (demContains(di, lat, lon)) {
-            log_d("%.4f %.4f contained in %s", lat, lon, di.path);
+            LOG_DEBUG("%F %F contained in %s", lat, lon, di->path);
             if (lookupTile(di, locinfo, lat, lon)) {
                 return SQLITE_OK;
             }
@@ -223,7 +229,7 @@ int getLocInfo(double lat, double lon, locInfo_t *locinfo) {
 }
 
 static void imageSpecs(PNG &p) {
-    log_d("image specs: (%d x %d), %d bpp, pixel type: %d alpha: %d buffersize: %d",
+    LOG_DEBUG("image specs: (%d x %d), %d bpp, pixel type: %d alpha: %d buffersize: %d",
           p.getWidth(), p.getHeight(), p.getBpp(),
           p.getPixelType(), p.hasAlpha(), p.getBufferSize());
 }

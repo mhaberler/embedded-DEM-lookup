@@ -1,5 +1,6 @@
 
 #include <M5Unified.h>
+
 #include <stdlib.h>
 #include <sqlite3.h>
 #include <SPI.h>
@@ -7,11 +8,12 @@
 #include "SD.h"
 #include "math.h"
 #include "Esp.h"
+#include "logging.hpp"
 #include "mbtiles.hpp"
-#include "mercmath.hpp"
-extern bool loopTaskWDTEnabled;
+#include "slippytiles.hpp"
 
-bool psRAMavail;
+#define STARTTIME(x) { x = esp_timer_get_time();}
+#define LAPTIME(x)  (uint32_t) (esp_timer_get_time() - x)
 
 #ifdef CORES3
 #define AW9523_ADDR 0x58
@@ -29,79 +31,85 @@ bool SDInit() {
 void setup(void) {
 
     delay(3000);
-    psRAMavail = ESP.getFreePsram() > 0;
+#ifdef M5UNIFIED
     auto cfg = M5.config();
     cfg.serial_baudrate = 115200;
     M5.begin(cfg);
+#else
+    Serial.begin(115200);
+#endif
+    Log.begin(LOG_LEVEL, &Serial);
 
-    log_e("C++ version: %ld", __cplusplus);
-    log_e("free heap: %lu", ESP.getFreeHeap());
-    log_e("used psram: %lu", ESP.getPsramSize() - ESP.getFreePsram());
+    LOG_INFO("C++ version: %l", __cplusplus);
+    LOG_INFO("free heap: %u", ESP.getFreeHeap());
+    LOG_INFO("used psram: %u", ESP.getPsramSize() - ESP.getFreePsram());
 
     SPI.begin();
     if (SDCardExist()) {
-        log_e("SD card detected, mounting..");
+        LOG_INFO("SD card detected, mounting..");
         SDInit();
     }
     int rc;
     double lat,lon,ref;
     demInfo_t *di = NULL;
     locInfo_t li = {};
+    int64_t now;
 
     sqlite3_initialize();
 
     rc = addMBTiles("/sd/test13.mbtiles", &di);
     if (rc != SQLITE_OK) {
-        log_e("addMBTiles fail: %d\n", rc);
+        LOG_ERROR("addMBTiles fail: %d\n", rc);
     } else {
-        log_e("maxZoom %d resolution: %.1fm/pixel", di->maxZoom, resolution(di->bbox.ll_lat, di->maxZoom));
+        LOG_INFO("maxZoom %d resolution: %Fm/pixel", di->maxZoom, resolution(di->bbox.ll_lat, di->maxZoom));
     }
 
     lat = 47.12925176802318;
     lon = 15.209778656353123;
     ref = 865.799987792969;
-    uint32_t now =  micros();;
+
+    STARTTIME(now);
     rc = getLocInfo(lat, lon, &li);
-    log_e("8113 Stiwoll Kehrer:  %d %d %.1f %.1f - %d uS cold", rc, li.status, li.elevation, ref,  micros()-now);
+    LOG_INFO("8113 Stiwoll Kehrer:  %d %d %F %F - %lu uS cold", rc, li.status, li.elevation, ref,  LAPTIME(now));
     li = {};
 
-    now =  micros();;
+    STARTTIME(now);
     rc = getLocInfo(lat, lon, &li);
-    log_e("8113 Stiwoll Kehrer:  %d %d %.1f %.1f - %d uS cached", rc, li.status, li.elevation, ref,  micros()-now);
+    LOG_INFO("8113 Stiwoll Kehrer:  %d %d %F %F - %d uS cached", rc, li.status, li.elevation, ref,  LAPTIME(now));
 
     li = {};
     lat = 48.2383409011934;
     lon = 16.299522929921253;
     ref = 333.0;
     rc = getLocInfo(lat, lon, &li);
-    log_e("1180 Utopiaweg 1:  %d %d %.1f %.1f", rc, li.status, li.elevation, ref);
+    LOG_INFO("1180 Utopiaweg 1:  %d %d %F %F", rc, li.status, li.elevation, ref);
 
     li = {};
     lat = 48.2610837936095;
     lon = 16.289583084029545;
     ref = 403.6;
     rc = getLocInfo(lat, lon, &li);
-    log_e("1190 Höhenstraße:  %d %d %.1f %.1f", rc, li.status, li.elevation, ref);
+    LOG_INFO("1190 Höhenstraße:  %d %d %F %F", rc, li.status, li.elevation, ref);
 
     li = {};
     lat = 48.208694143314325;
     lon =16.37255104738311;
     ref = 171.4;
     rc = getLocInfo(lat, lon, &li);
-    log_e("1010 Stephansplatz:   %d %d %.1f %.1f", rc, li.status, li.elevation, ref);
+    LOG_INFO("1010 Stephansplatz:   %d %d %F %F", rc, li.status, li.elevation, ref);
 
     li = {};
     lat = 48.225003606677504;
     lon = 16.44120643847108;
     ref = 158.6;
     rc = getLocInfo(lat, lon, &li);
-    log_e("1220 Industriestraße 81:  %d %d %.1f %.1f\n", rc, li.status, li.elevation, ref);
+    LOG_INFO("1220 Industriestraße 81:  %d %d %F %F\n", rc, li.status, li.elevation, ref);
 
     printCache();
     printDems();
-    log_e("free heap: %lu", ESP.getFreeHeap());
-    log_e("used psram: %lu", ESP.getPsramSize() - ESP.getFreePsram());
-
+    
+    LOG_INFO("free heap: %u", ESP.getFreeHeap());
+    LOG_INFO("used psram: %u", ESP.getPsramSize() - ESP.getFreePsram());
 }
 
 void loop(void) {

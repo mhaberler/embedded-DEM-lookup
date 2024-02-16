@@ -11,6 +11,7 @@
  *  - add an optional evict callback
  *  - add items() iterator
  *  - add remove() method
+ * haberlerm@gmail.com 2/2024
  */
 #ifndef _LRUCACHE_HPP_INCLUDED_
 #define	_LRUCACHE_HPP_INCLUDED_
