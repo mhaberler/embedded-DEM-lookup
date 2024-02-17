@@ -6,6 +6,7 @@ import sys
 
 tile_size = 256
 
+
 def read_max_zoom_from_mbtiles(mbtiles_path):
     conn = sqlite3.connect(mbtiles_path)
     cursor = conn.cursor()
@@ -35,8 +36,7 @@ def lat_lon_to_pixel(lat, lon, zoom, tile_size):
     y = (
         (
             1
-            - math.log(math.tan(math.radians(lat)) 
-            + 1 / math.cos(math.radians(lat)))
+            - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat)))
             / math.pi
         )
         / 2
@@ -49,8 +49,8 @@ def lat_lon_to_pixel(lat, lon, zoom, tile_size):
 def lat_lon_to_tile(lat, lon, zoom, tile_size):
     # Convert latitude and longitude to tile coordinates at a given zoom level
     pixel_x, pixel_y = lat_lon_to_pixel(lat, lon, zoom, tile_size)
-    tile_x = int(pixel_x / 256)
-    tile_y = int(pixel_y / 256)
+    tile_x = pixel_x // 256
+    tile_y = pixel_y // 256
     return tile_x, tile_y
 
 
@@ -73,7 +73,7 @@ def rgb2h(red, green, blue, debug=False):
 def altitudeAt(image, x, y, debug=False):
     pixel = image.getpixel((x, y))
     red, green, blue = pixel[0], pixel[1], pixel[2]
-    return rgb2h(red, green, blue, debug)
+    return rgb2h(red, green, blue, debug), red, green, blue
 
 
 def decode_png(tile_data):
@@ -81,7 +81,7 @@ def decode_png(tile_data):
 
 
 # Example usage: getaltitude.py <dem.mbtiles>
-if  len(sys.argv) == 1:
+if len(sys.argv) == 1:
     mbtiles_path = "data/mbtiles/test13.mbtiles"
 else:
     mbtiles_path = sys.argv[1]
@@ -110,7 +110,7 @@ def getAltitude(mbtiles_path, latitude, longitude, zoom_level, debug=False):
 
 # testset from https://github.com/syncpoint/terrain-rgb/blob/master/README.md#verifying-the-elevation-data
 testset = [
-        (
+    (
         "8113 Stiwoll Kehrer",
         15.209778656353123,
         47.12925176802318,
@@ -170,11 +170,21 @@ testset = [
         158.625,
         158.6,
     ),
-
+    (
+        # within bounding box so has a NODATA value - outside DEM coverage
+        # should return elevation 0
+        "Traunstein DE, outside coverage",
+        12.658149018177179,
+        47.86762217761052,
+        0,
+        0,
+        0,
+        0,
+    ),
 ]
 
 for test in testset:
     loc, longitude, latitude, proven, lambert, epsg3857, epsg3857rgb = test
-    altitude = getAltitude(mbtiles_path, latitude, longitude, zoom_level, debug)
-    delta = round((epsg3857rgb - altitude)*100)
-    print(f"{loc}: reference={epsg3857rgb} altitude={altitude:.1f} delta={delta}cm")
+    altitude,red,green,blue = getAltitude(mbtiles_path, latitude, longitude, zoom_level, debug)
+    delta = round((epsg3857rgb - altitude) * 100)
+    print(f"{loc}: {red=} {green=} {blue=} reference={epsg3857rgb} altitude={altitude:.1f} delta={delta}cm")

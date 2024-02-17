@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "logging.hpp"
 
 static inline double to_radians(double degrees) {
     return degrees * M_PI / 180.0;
@@ -16,8 +17,9 @@ typedef struct {
     uint8_t alpha;
 } rgba_t;
 
-static inline double rgb2alt(const rgba_t px) {
-    return  -10000 + ((px.red * 256 * 256 + px.green * 256 + px.blue) * 0.1);
+static inline double rgb2alt(const uint8_t *px) {
+    LOG_DEBUG("rgb %d %d %d", px[0], px[1], px[2]);
+    return  -10000 + ((px[0] * 256 * 256 + px[1] * 256 + px[2]) * 0.1);
 }
 
 double resolution(double latitude, uint32_t zoom);

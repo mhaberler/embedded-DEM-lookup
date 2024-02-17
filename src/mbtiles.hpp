@@ -1,12 +1,12 @@
 #pragma once
-#include "lrucache.hpp"
 
 #include <sqlite3.h>
 #include <vector>
+#include "lrucache.hpp"
 
-
-
-#define TILE_SIZE 256 // FIXME should come from mbtiles
+#ifndef TILESIZE
+    #define TILESIZE 256
+#endif
 
 #ifndef TILECACHE_SIZE
     #define TILECACHE_SIZE 5
@@ -14,8 +14,8 @@
 
 typedef struct {
     uint8_t *buffer;
-    size_t size;
-} rgbaTile_t;
+    size_t width; // of a line in pixels
+} tile_t;
 
 typedef struct  {
     uint16_t index;
@@ -34,8 +34,21 @@ typedef enum {
     LS_VALID,
     LS_NODATA,
     LS_TILE_NOT_FOUND,
+    LS_WEBP_DECODE_ERROR,
+    LS_PNG_DECODE_ERROR,
+    LS_PNG_COMPRESSED,
+    LS_WEBP_COMPRESSED,
+    LS_UNKNOWN_IMAGE_FORMAT,
     LS_DB_ERROR
 } locStatus_t;
+
+typedef enum {
+    ENC_NONE,
+    ENC_UNKNOWN,
+    ENC_PNG,
+    ENC_WEBP,
+    ENC_BAD_FORMAT,
+} encoding_t;
 
 typedef struct {
     double elevation;
@@ -57,15 +70,13 @@ typedef struct {
     uint32_t tile_errors;
     uint32_t cache_hits;
     uint32_t cache_misses;
-    uint16_t tileSize;
-
+    uint16_t tile_size;
+    encoding_t encoding;
     uint8_t index;
-    uint8_t maxZoom;
+    uint8_t max_zoom;
 } demInfo_t;
 
-typedef int (*blob_cb)(int zoom, int x, int y, const int32_t size, const void *data);
-
-int addMBTiles(const char *path, demInfo_t **demInfo = NULL);
+int addDEM(const char *path, demInfo_t **demInfo = NULL);
 int getLocInfo(double lat, double lon, locInfo_t *locinfo);
 
 void printCache(void);

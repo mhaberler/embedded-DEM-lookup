@@ -57,11 +57,11 @@ void setup(void) {
 
     sqlite3_initialize();
 
-    rc = addMBTiles("/sd/test13.mbtiles", &di);
+    rc = addDEM(TEST_DEM, &di);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("addMBTiles fail: %d\n", rc);
+        LOG_ERROR("addDEM fail: %d\n", rc);
     } else {
-        LOG_INFO("maxZoom %d resolution: %Fm/pixel", di->maxZoom, resolution(di->bbox.ll_lat, di->maxZoom));
+        LOG_INFO("max_zoom %d resolution: %Fm/pixel", di->max_zoom, resolution(di->bbox.ll_lat, di->max_zoom));
     }
 
     lat = 47.12925176802318;
@@ -70,7 +70,7 @@ void setup(void) {
 
     STARTTIME(now);
     rc = getLocInfo(lat, lon, &li);
-    LOG_INFO("8113 Stiwoll Kehrer:  %d %d %F %F - %lu uS cold", rc, li.status, li.elevation, ref,  LAPTIME(now));
+    LOG_INFO("8113 Stiwoll Kehrer:  %d %d %F %F - %d uS cold", rc, li.status, li.elevation, ref,  LAPTIME(now));
     li = {};
 
     STARTTIME(now);
@@ -107,7 +107,7 @@ void setup(void) {
 
     printCache();
     printDems();
-    
+
     LOG_INFO("free heap: %u", ESP.getFreeHeap());
     LOG_INFO("used psram: %u", ESP.getPsramSize() - ESP.getFreePsram());
 }

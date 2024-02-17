@@ -4,53 +4,54 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <math.h>
-#include <PNGdec.h>
+
+#include "pngle.h"
+
+#include "webp/decode.h"
+#include "webp/encode.h"
+#include "webp/types.h"
 
 #include "logging.hpp"
 #include "mbtiles.hpp"
 #include "slippytiles.hpp"
 
-
 static const char *tileQuery = "SELECT tile_data FROM tiles WHERE"
                                " zoom_level = ? AND tile_column = ? AND tile_row = ?";
-static const char *maxZoomQuery = "SELECT max(zoom_level) FROM tiles";
+static const char *max_zoomQuery = "SELECT max(zoom_level) FROM tiles";
 static const char *bboxQuery = "SELECT min(tile_column),max(tile_column),"
                                "min(tile_row),max(tile_row) FROM tiles WHERE zoom_level = ?";
 
-static void evictTile(uint64_t key, rgbaTile_t *t);
-static cache::lru_cache<uint64_t, rgbaTile_t *> tile_cache(TILECACHE_SIZE, {}, evictTile);
-static void imageSpecs(PNG &p);
+static void evictTile(uint64_t key, tile_t *t);
 
-static PNG png;
+static cache::lru_cache<uint64_t, tile_t *> tile_cache(TILECACHE_SIZE, {}, evictTile);
 static std::vector<demInfo_t *> dems;
 static uint8_t dbindex;
-
-
+static uint8_t pngSignature[] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
 
 int getBBox(sqlite3 *db, demInfo_t *di) {
     sqlite3_stmt* stmt = nullptr;
-    int maxZoom = -1;
+    int max_zoom = -1;
     int tc_min, tc_max, tr_min, tr_max;
 
-    int rc = sqlite3_prepare_v2(db, maxZoomQuery, -1, &stmt, nullptr);
+    int rc = sqlite3_prepare_v2(db, max_zoomQuery, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
         return rc;
     }
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
-        maxZoom = sqlite3_column_int(stmt, 0);
-        di->maxZoom = maxZoom;
-        LOG_DEBUG("maxzoom: %d", maxZoom);
+        max_zoom = sqlite3_column_int(stmt, 0);
+        di->max_zoom = max_zoom;
+        LOG_DEBUG("max_zoom: %d", max_zoom);
     } else {
-        LOG_ERROR("maxzoom query failed %d", sqlite3_column_int(stmt, 0));
+        LOG_ERROR("max_zoom query failed %d", sqlite3_column_int(stmt, 0));
         sqlite3_finalize(stmt);
         return rc;
     }
     sqlite3_finalize(stmt);
     stmt = nullptr;
     rc = sqlite3_prepare_v2(db, bboxQuery, -1, &stmt, nullptr);
-    sqlite3_bind_int(stmt, 1, maxZoom);
+    sqlite3_bind_int(stmt, 1, max_zoom);
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
         tc_min = sqlite3_column_int(stmt, 0);
@@ -65,19 +66,19 @@ int getBBox(sqlite3 *db, demInfo_t *di) {
     }
     sqlite3_finalize(stmt);
 
-    di->bbox.ll_lat = tiley2lat(tr_max, maxZoom);
-    di->bbox.ll_lon = tilex2long(tc_min, maxZoom);
-    di->bbox.tr_lat = tiley2lat(tr_min, maxZoom);
-    di->bbox.tr_lon = tilex2long(tc_max, maxZoom);
+    di->bbox.ll_lat = tiley2lat(tr_max, max_zoom);
+    di->bbox.ll_lon = tilex2long(tc_min, max_zoom);
+    di->bbox.tr_lat = tiley2lat(tr_min, max_zoom);
+    di->bbox.tr_lon = tilex2long(tc_max, max_zoom);
     di->index = ++dbindex;
 
     LOG_DEBUG("bbox %F %F %F %F",
-          di->bbox.ll_lat, di->bbox.tr_lat,
-          di->bbox.ll_lon, di->bbox.tr_lon);
+              di->bbox.ll_lat, di->bbox.tr_lat,
+              di->bbox.ll_lon, di->bbox.tr_lon);
     return SQLITE_OK;
 }
 
-int addMBTiles(const char *path, demInfo_t **demInfo) {
+int addDEM(const char *path, demInfo_t **demInfo) {
     demInfo_t *di = new demInfo_t();
     int rc = sqlite3_open(path, &di->db);
     if (rc != SQLITE_OK) {
@@ -93,7 +94,7 @@ int addMBTiles(const char *path, demInfo_t **demInfo) {
         delete di;
         return rc;
     }
-    di->tileSize = TILE_SIZE; // FIXME get from mbtiles
+    di->tile_size = TILESIZE;
     di->path = strdup(path);
     dems.push_back(di);
     if (demInfo != NULL) {
@@ -121,13 +122,13 @@ void printCache(void) {
 
 void printDems(void) {
     for (auto d: dems) {
-        LOG_INFO("dem %d: %s bbx=%F/%F..%F/%F dberr=%d tile_err=%d hits=%d misses=%d",
-              d->index, d->path,d->bbox.ll_lat,d->bbox.ll_lon, d->bbox.tr_lat,d->bbox.tr_lon,
-              d->db_errors, d->tile_errors, d->cache_hits, d->cache_misses);
+        LOG_INFO("dem %d: %s bbx=%F/%F..%F/%F dberr=%d tile_err=%d hits=%d misses=%d tilesize=%d",
+                 d->index, d->path,d->bbox.ll_lat,d->bbox.ll_lon, d->bbox.tr_lat,d->bbox.tr_lon,
+                 d->db_errors, d->tile_errors, d->cache_hits, d->cache_misses, d->tile_size);
     }
 }
 
-void freeTile(rgbaTile_t *tile) {
+static void freeTile(tile_t *tile) {
     if (tile == NULL)
         return;
     if (tile->buffer != NULL)
@@ -135,7 +136,7 @@ void freeTile(rgbaTile_t *tile) {
     heap_caps_free(tile);
 }
 
-static void evictTile(uint64_t key, rgbaTile_t *t) {
+static void evictTile(uint64_t key, tile_t *t) {
     LOG_DEBUG("evict %s",keyStr(key).c_str());
     if (t != NULL) {
         if ( t->buffer != NULL)
@@ -144,18 +145,45 @@ static void evictTile(uint64_t key, rgbaTile_t *t) {
     }
 }
 
+static encoding_t encodingType(const uint8_t *blob, int blob_size) {
+    if (memcmp(blob, pngSignature, sizeof(pngSignature)) == 0) {
+        return ENC_PNG;
+    }
+    if (!memcmp(blob, "RIFF", 4) && !memcmp(blob + 8, "WEBP", 4)) {
+        return ENC_WEBP;
+    }
+    return ENC_UNKNOWN;
+}
+
+static void pngle_init_cb(pngle_t *pngle, uint32_t w, uint32_t h) {
+    size_t size =  w * h * 3;
+    tile_t *tile = (tile_t *)heap_caps_malloc(sizeof(tile_t), MALLOC_CAP_SPIRAM);
+    tile->buffer = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+    tile->width = w;
+    pngle_set_user_data(pngle, tile);
+}
+
+static int lines = 6;
+static void pngle_draw_cb(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t rgba[4]) {
+    tile_t *tile = (tile_t *) pngle_get_user_data(pngle);
+    size_t offset = (x + tile->width * y) * 3;
+    tile->buffer[offset] = rgba[0];
+    tile->buffer[offset+1] = rgba[1];
+    tile->buffer[offset+2] = rgba[2];
+}
+
 bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
     xyz_t key;
-    rgbaTile_t *tile = NULL;
+    tile_t *tile = NULL;
     double offset_x, offset_y;
     int32_t tile_x, tile_y;
-    compute_pixel_offset(lat, lon, di->maxZoom, di->tileSize,
+    compute_pixel_offset(lat, lon, di->max_zoom, di->tile_size,
                          tile_x, tile_y, offset_x, offset_y);
 
     key.entry.index = di->index;
     key.entry.x =  (uint16_t)tile_x;
     key.entry.y =  (uint16_t)tile_y;
-    key.entry.z = di->maxZoom;
+    key.entry.z = di->max_zoom;
 
     if (!tile_cache.exists(key.key)) {
         LOG_DEBUG("cache entry %s not found", keyStr(key.key).c_str());
@@ -172,44 +200,106 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             const uint8_t *blob = (const uint8_t *)sqlite3_column_blob(stmt, 0);
             int blob_size = sqlite3_column_bytes(stmt, 0);
-            rc = png.openRAM((uint8_t *)blob, blob_size, NULL);
-            if (rc == PNG_SUCCESS) {
-                tile = (rgbaTile_t *) heap_caps_malloc(sizeof(rgbaTile_t), MALLOC_CAP_SPIRAM);
-                int tsize = png.getBufferSize();
-                uint8_t *buffer = (uint8_t *) heap_caps_malloc(tsize, MALLOC_CAP_SPIRAM);
-                if ((tile != NULL) && (buffer != NULL) && (tsize != 0)) {
-                    tile->buffer = buffer;
-                    tile->size = tsize;
-                    png.setBuffer(tile->buffer);
-                    if (png.decode(NULL, 0) == PNG_SUCCESS) {
-                        imageSpecs(png);
-                        tile_cache.put(key.key, tile);
-                        locinfo->status = LS_VALID;
-                    } else {
-                        freeTile(tile);
-                        tile = NULL;
-                        di->tile_errors++;
-                        locinfo->status = LS_TILE_NOT_FOUND;
-                    }
-                }
-            } else {
 
+            switch(encodingType(blob, blob_size)) {
+                case ENC_PNG: {
+                        pngle_t *pngle = pngle_new();
+                        pngle_set_init_callback(pngle, pngle_init_cb);
+                        pngle_set_draw_callback(pngle, pngle_draw_cb);
+                        int fed = pngle_feed(pngle, blob, blob_size);
+                        if (fed != blob_size) {
+                            LOG_ERROR("%s: decode failed: decoded %d out of %u: %s",
+                                      keyStr(key.key).c_str(), fed, blob_size, pngle_error(pngle));
+                            freeTile(tile);
+                            tile = NULL;
+                            di->tile_errors++;
+                            locinfo->status = LS_PNG_DECODE_ERROR;
+                        } else {
+                            pngle_ihdr_t *hdr = pngle_get_ihdr(pngle);
+                            if (hdr->compression) {
+                                locinfo->status = LS_PNG_COMPRESSED;
+                                LOG_ERROR("%s: compressed PNG tile",
+                                          keyStr(key.key).c_str());
+                            } else {
+                                di->tile_size = pngle_get_width(pngle);
+                                tile = (tile_t *) pngle_get_user_data(pngle);
+                                tile_cache.put(key.key, tile);
+                                locinfo->status = LS_VALID;
+                            }
+                        }
+                        pngle_destroy(pngle);
+                        sqlite3_finalize(stmt);
+                    }
+                    break;
+                case ENC_WEBP: {
+                        int width, height;
+                        VP8StatusCode sc;
+                        WebPDecoderConfig config;
+                        size_t bufsize;
+                        uint8_t *buffer;
+
+                        WebPInitDecoderConfig(&config);
+                        if (!WebPGetInfo(blob, blob_size, &width, &height)) {
+                            LOG_ERROR("%s: WebPGetInfo failed rc=%d", keyStr(key.key).c_str(), rc);
+                            locinfo->status = LS_WEBP_DECODE_ERROR;
+                            sqlite3_finalize(stmt);
+                            break;
+                        }
+                        sc = WebPGetFeatures(blob, blob_size, &config.input);
+                        if (sc != VP8_STATUS_OK) {
+                            LOG_ERROR("%s: WebPGetFeatures failed sc=%d", keyStr(key.key).c_str(), sc);
+                            locinfo->status = LS_WEBP_DECODE_ERROR;
+                            sqlite3_finalize(stmt);
+                            break;
+                        }
+                        if (config.input.format != 2) {
+                            LOG_ERROR("%s: lossy WEBP compression", keyStr(key.key).c_str());
+                            locinfo->status = LS_WEBP_COMPRESSED;
+                            sqlite3_finalize(stmt);
+                            break;
+                        }
+                        LOG_DEBUG("webp w %d h %d alpha %d animate %d format %d",
+                                  config.input.width, config.input.height,config.input.has_alpha,
+                                  config.input.has_animation, config.input.format);
+
+                        tile = (tile_t *) heap_caps_malloc(sizeof(tile_t), MALLOC_CAP_SPIRAM);
+                        bufsize = width * height * 3;
+                        buffer = (uint8_t *) heap_caps_malloc(bufsize, MALLOC_CAP_SPIRAM);
+                        if ((tile != NULL) && (buffer != NULL) && (bufsize != 0)) {
+                            tile->buffer = buffer;
+                            tile->width = config.input.width;
+                            if (WebPDecodeRGBInto(blob, blob_size,
+                                                  buffer, bufsize, width * 3) == NULL) {
+                                LOG_ERROR("%s: WebPDecode failed", keyStr(key.key).c_str());
+                                freeTile(tile);
+                                tile = NULL;
+                                di->tile_errors++;
+                                locinfo->status = LS_WEBP_DECODE_ERROR;
+                            } else {
+                                di->tile_size = config.input.width;
+                                tile_cache.put(key.key, tile);
+                                locinfo->status = LS_VALID;
+                            }
+                            WebPFreeDecBuffer(&config.output);
+                            sqlite3_finalize(stmt);
+                        }
+                        break;
+                    default:
+                        locinfo->status = LS_UNKNOWN_IMAGE_FORMAT;
+                        break;
+                    }
             }
-            png.close();
         }
-        sqlite3_finalize(stmt);
     } else {
         LOG_DEBUG("cache entry %s found: ", keyStr(key.key).c_str());
         tile = tile_cache.get(key.key);
         locinfo->status = LS_VALID;
         di->cache_hits++;
     }
-    // assert(locinfo->status == LS_VALID);
     // assert(tile->buffer != NULL);
     if (locinfo->status == LS_VALID) {
-        const rgba_t *img =(rgba_t*)tile->buffer;
-        size_t i = round(offset_x)  + round(offset_y) * di->tileSize;
-        locinfo->elevation = rgb2alt(img[i]);
+        size_t i = round(offset_x)  + round(offset_y) * di->tile_size;
+        locinfo->elevation = rgb2alt(&tile->buffer[i * 3] );
         return true;
     }
     return false;
@@ -226,12 +316,6 @@ int getLocInfo(double lat, double lon, locInfo_t *locinfo) {
     }
     locinfo->status = LS_TILE_NOT_FOUND;
     return SQLITE_OK;
-}
-
-static void imageSpecs(PNG &p) {
-    LOG_DEBUG("image specs: (%d x %d), %d bpp, pixel type: %d alpha: %d buffersize: %d",
-          p.getWidth(), p.getHeight(), p.getBpp(),
-          p.getPixelType(), p.hasAlpha(), p.getBufferSize());
 }
 
 std::string string_format(const std::string fmt, ...) {
