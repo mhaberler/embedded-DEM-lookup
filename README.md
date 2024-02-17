@@ -93,8 +93,11 @@ works, but unpolished. Very C-ish code.
 
 ## possible improvements
 
-- use webp for tile compression
-- shrink memory requirements by storing 3 bytes/per pixel instead of 4 - the alpha channel is not needed (but might be useful for missing data/NODATA anyway)
+- use webp for tile compression. The file sizes for different encoding methods of the sample above are:
+   - png: 606MB
+   - webp-lossless:  374MB
+   - webp at quality 75:  68M
+- shrink memory requirements by storing 3 bytes/per pixel instead of 4 - the alpha channel is not needed right now (but might be useful for missing data/NODATA anyway)
 - the code supports several DEM's concurrently, reporting the first match - not yet tested
 
 ## parts list
