@@ -103,6 +103,11 @@ see `src/main.cpp`.
 ## Status
 works fine, but very C-ish code.
 
+
+## NODATA values
+
+These are reported as altitude 0.0m.
+
 ## What about compression?
 
 TLDR;  I tried - don't.
@@ -120,6 +125,7 @@ Now assume compression changes this to RGB(2,168,127) - which results in altitud
 This is why using compressed PNG or webp tiles returns an error code.
 
 ## possible improvements
+- removing tiles which contain no useful data
 - the code supports several DEM's concurrently, reporting the first match - not yet tested
 
 ## parts list
