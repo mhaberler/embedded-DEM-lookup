@@ -124,8 +124,13 @@ Now assume compression changes this to RGB(2,168,127) - which results in altitud
 
 This is why using compressed PNG or webp tiles returns an error code.
 
+## Can't we save space by deleting empty tiles?
+
+Yes, but not a lot. 
+For webp, the empty tile blob is 44 bytes, for PNG it's 856 bytes.
+The example file has 17472 tiles out of which 8703 are empty. So deleting the empty tiles saves about 383K for webp and about 7.5MB for PNG - or about 1% of the blob space, plus a bit more for the index - barely worth the effort.
+
 ## possible improvements
-- removing tiles which contain no useful data
 - the code supports several DEM's concurrently, reporting the first match - not yet tested
 
 ## parts list
