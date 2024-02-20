@@ -28,12 +28,16 @@ static std::vector<demInfo_t *> dems;
 static uint8_t dbindex;
 static uint8_t pngSignature[] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
 
+void decodeInit(void) {
+    sqlite3_initialize();
+}
+
 int getBBox(sqlite3 *db, demInfo_t *di) {
     sqlite3_stmt* stmt = nullptr;
     int max_zoom = -1;
     int tc_min, tc_max, tr_min, tr_max;
 
-    int rc = sqlite3_prepare_v2(db, max_zoomQuery, -1, &stmt, nullptr);
+    int rc = sqlite3_prepare_v3(db, max_zoomQuery, -1, 0, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
         return rc;
@@ -50,7 +54,7 @@ int getBBox(sqlite3 *db, demInfo_t *di) {
     }
     sqlite3_finalize(stmt);
     stmt = nullptr;
-    rc = sqlite3_prepare_v2(db, bboxQuery, -1, &stmt, nullptr);
+    rc = sqlite3_prepare_v3(db, bboxQuery, -1, 0, &stmt, nullptr);
     sqlite3_bind_int(stmt, 1, max_zoom);
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
@@ -83,6 +87,13 @@ int addDEM(const char *path, demInfo_t **demInfo) {
     int rc = sqlite3_open(path, &di->db);
     if (rc != SQLITE_OK) {
         LOG_ERROR("Can't open database %s: rc=%d %s", path, rc, sqlite3_errmsg(di->db));
+        delete di;
+        return rc;
+    }
+    rc = sqlite3_prepare_v3(di->db, tileQuery, -1, SQLITE_PREPARE_PERSISTENT, &di->stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        LOG_DEBUG("sqlite3_prepare_v3 '%s' failed: rc=%d %s", tileQuery, rc, sqlite3_errmsg(di->db));
+        di->db_errors++;
         delete di;
         return rc;
     }
@@ -189,20 +200,26 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
         LOG_DEBUG("cache entry %s not found", keyStr(key.key).c_str());
         di->cache_misses++;
 
+        TIMESTAMP(query);
+        STARTTIME(query);
+
         // fetch the missing tile
-        sqlite3_stmt* stmt = nullptr;
-        int rc = sqlite3_prepare_v2(di->db, tileQuery, -1, &stmt, nullptr);
+        sqlite3_clear_bindings(di->stmt);
 
-        sqlite3_bind_int(stmt, 1, key.entry.z);
-        sqlite3_bind_int(stmt, 2, key.entry.x);
-        sqlite3_bind_int(stmt, 3, key.entry.y);
+        sqlite3_bind_int(di->stmt, 1, key.entry.z);
+        sqlite3_bind_int(di->stmt, 2, key.entry.x);
+        sqlite3_bind_int(di->stmt, 3, key.entry.y);
 
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            const uint8_t *blob = (const uint8_t *)sqlite3_column_blob(stmt, 0);
-            int blob_size = sqlite3_column_bytes(stmt, 0);
+        if (sqlite3_step(di->stmt) == SQLITE_ROW) {
+            const uint8_t *blob = (const uint8_t *)sqlite3_column_blob(di->stmt, 0);
+            int blob_size = sqlite3_column_bytes(di->stmt, 0);
+
+            PRINT_LAPTIME("blob retrieve %u us", query);
 
             switch(encodingType(blob, blob_size)) {
                 case ENC_PNG: {
+                        TIMESTAMP(pngdecode);
+                        STARTTIME(pngdecode);
                         pngle_t *pngle = pngle_new();
                         pngle_set_init_callback(pngle, pngle_init_cb);
                         pngle_set_draw_callback(pngle, pngle_draw_cb);
@@ -228,40 +245,37 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
                             }
                         }
                         pngle_destroy(pngle);
-                        sqlite3_finalize(stmt);
+                        PRINT_LAPTIME("PNG decode %u us", pngdecode);
                     }
                     break;
                 case ENC_WEBP: {
-                        int width, height;
+                        TIMESTAMP(webpdecode);
+                        STARTTIME(webpdecode);
+
+                        int width, height, rc;
                         VP8StatusCode sc;
                         WebPDecoderConfig config;
                         size_t bufsize;
                         uint8_t *buffer;
 
                         WebPInitDecoderConfig(&config);
-                        if (!WebPGetInfo(blob, blob_size, &width, &height)) {
+                        rc = WebPGetInfo(blob, blob_size, &width, &height);
+                        if (!rc) {
                             LOG_ERROR("%s: WebPGetInfo failed rc=%d", keyStr(key.key).c_str(), rc);
                             locinfo->status = LS_WEBP_DECODE_ERROR;
-                            sqlite3_finalize(stmt);
                             break;
                         }
                         sc = WebPGetFeatures(blob, blob_size, &config.input);
                         if (sc != VP8_STATUS_OK) {
                             LOG_ERROR("%s: WebPGetFeatures failed sc=%d", keyStr(key.key).c_str(), sc);
                             locinfo->status = LS_WEBP_DECODE_ERROR;
-                            sqlite3_finalize(stmt);
                             break;
                         }
                         if (config.input.format != 2) {
                             LOG_ERROR("%s: lossy WEBP compression", keyStr(key.key).c_str());
                             locinfo->status = LS_WEBP_COMPRESSED;
-                            sqlite3_finalize(stmt);
                             break;
                         }
-                        LOG_DEBUG("webp w %d h %d alpha %d animate %d format %d",
-                                  config.input.width, config.input.height,config.input.has_alpha,
-                                  config.input.has_animation, config.input.format);
-
                         tile = (tile_t *) heap_caps_malloc(sizeof(tile_t), MALLOC_CAP_SPIRAM);
                         bufsize = width * height * 3;
                         buffer = (uint8_t *) heap_caps_malloc(bufsize, MALLOC_CAP_SPIRAM);
@@ -281,7 +295,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
                                 locinfo->status = LS_VALID;
                             }
                             WebPFreeDecBuffer(&config.output);
-                            sqlite3_finalize(stmt);
+                            PRINT_LAPTIME("WEBP decode %u us", webpdecode);
                         }
                         break;
                     default:
@@ -297,6 +311,8 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
         di->cache_hits++;
     }
     // assert(tile->buffer != NULL);
+    sqlite3_reset(di->stmt);
+
     if (locinfo->status == LS_VALID) {
         size_t i = round(offset_x)  + round(offset_y) * di->tile_size;
         locinfo->elevation = rgb2alt(&tile->buffer[i * 3] );

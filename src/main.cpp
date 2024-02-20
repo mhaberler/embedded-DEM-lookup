@@ -12,9 +12,6 @@
 #include "mbtiles.hpp"
 #include "slippytiles.hpp"
 
-#define STARTTIME(x) { x = esp_timer_get_time();}
-#define LAPTIME(x)  (uint32_t) (esp_timer_get_time() - x)
-
 #ifdef CORES3
 #define AW9523_ADDR 0x58
 #define SD_CS 4
@@ -53,9 +50,9 @@ void setup(void) {
     double lat,lon,ref;
     demInfo_t *di = NULL;
     locInfo_t li = {};
-    int64_t now;
+    TIMESTAMP(now);
 
-    sqlite3_initialize();
+    decodeInit();
 
     rc = addDEM(TEST_DEM, &di);
     if (rc != SQLITE_OK) {

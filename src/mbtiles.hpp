@@ -2,7 +2,22 @@
 
 #include <sqlite3.h>
 #include <vector>
+#include <string>
 #include "lrucache.hpp"
+
+#ifdef ESP32_TIMING
+#define xstr(s) str(s)
+#define str(s) #s
+#define TIMESTAMP(x) int64_t x;
+#define STARTTIME(x) do { x = esp_timer_get_time();} while (0);
+#define PRINT_LAPTIME(fmt, x)  do { Serial.printf(fmt xstr(\n), (uint32_t) (esp_timer_get_time() - x)); } while (0);
+#define LAPTIME(x)  ((uint32_t) (esp_timer_get_time() - x))
+#else
+#define TIMESTAMP(x)
+#define STARTTIME(x) 
+#define PRINT_LAPTIME(fmt, x) 
+#define LAPTIME(x) 0
+#endif
 
 #ifndef TILESIZE
     #define TILESIZE 256
@@ -65,6 +80,7 @@ typedef struct {
 typedef struct {
     const char *path;
     sqlite3 *db;
+    sqlite3_stmt* stmt;
     bbox_t bbox;
     uint32_t db_errors;
     uint32_t tile_errors;
@@ -76,6 +92,7 @@ typedef struct {
     uint8_t max_zoom;
 } demInfo_t;
 
+void decodeInit(void);
 int addDEM(const char *path, demInfo_t **demInfo = NULL);
 int getLocInfo(double lat, double lon, locInfo_t *locinfo);
 
