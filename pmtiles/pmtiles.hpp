@@ -583,7 +583,6 @@ inline std::tuple<std::string, std::string, int> make_root_leaves(const std::fun
 inline void collect_entries(const std::function<std::string(const std::string &, uint8_t)> decompress, std::vector<entry_zxy> &tile_entries, const char *pmtiles_map, const headerv3 &h, uint64_t dir_offset, uint64_t dir_len) {
 	std::string dir_s{pmtiles_map + dir_offset, static_cast<size_t>(dir_len)};
 	std::string decompressed_dir = decompress(dir_s, h.internal_compression);
-    printf("decompressed_dir size=%u\n", decompressed_dir.length());
 
 	auto dir_entries = pmtiles::deserialize_directory(decompressed_dir);
 	for (auto const &entry : dir_entries) {
