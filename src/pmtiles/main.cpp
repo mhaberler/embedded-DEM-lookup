@@ -52,13 +52,11 @@ void setup(void) {
     locInfo_t li = {};
     TIMESTAMP(now);
 
-    decodeInit();
-
     rc = addDEM(TEST_DEM, &di);
     if (rc != SQLITE_OK) {
         LOG_ERROR("addDEM fail: %d\n", rc);
     } else {
-        LOG_INFO("max_zoom %d resolution: %Fm/pixel", di->max_zoom, resolution(di->bbox.ll_lat, di->max_zoom));
+        // LOG_INFO("max_zoom %d resolution: %Fm/pixel", di->max_zoom, resolution(di->bbox.ll_lat, di->max_zoom));
     }
 
     lat = 47.12925176802318;

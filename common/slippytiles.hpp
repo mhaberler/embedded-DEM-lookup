@@ -23,6 +23,14 @@ static inline double rgb2alt(const uint8_t *px) {
     return  -10000 + ((px[0] * 256 * 256 + px[1] * 256 + px[2]) * 0.1);
 }
 
+static inline int32_t to_e7(const double &v) {
+    return int(v * 10000000);
+}
+
+static inline double from_e7(const int32_t &v) {
+    return double(v) / 10000000.0;
+}
+
 double resolution(double latitude, uint32_t zoom);
 double tilex2long(int32_t x, uint32_t zoom);
 double tiley2lat(int32_t y, uint32_t zoom);

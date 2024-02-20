@@ -3,7 +3,12 @@
 #include <sqlite3.h>
 #include <vector>
 #include <string>
+#include "pmtiles.hpp"
 #include "lrucache.hpp"
+#include "slippytiles.hpp"
+
+using namespace std;
+using namespace pmtiles;
 
 #ifdef ESP32_TIMING
 #define xstr(s) str(s)
@@ -79,9 +84,10 @@ typedef struct {
 
 typedef struct {
     const char *path;
-    sqlite3 *db;
-    sqlite3_stmt* stmt;
-    bbox_t bbox;
+    headerv3 header;
+    // sqlite3 *db;
+    // sqlite3_stmt* stmt;
+    // bbox_t bbox;
     uint32_t db_errors;
     uint32_t tile_errors;
     uint32_t cache_hits;
@@ -92,6 +98,13 @@ typedef struct {
     uint8_t max_zoom;
 } demInfo_t;
 
+
+static inline double min_lat(const demInfo_t *d) { return from_e7(d->header.min_lat_e7); }
+static inline double max_lat(const demInfo_t *d) { return from_e7(d->header.max_lat_e7); }
+static inline double min_lon(const demInfo_t *d) { return from_e7(d->header.min_lon_e7); }
+static inline double max_lon(const demInfo_t *d) { return from_e7(d->header.max_lon_e7); }
+
+
 void decodeInit(void);
 int addDEM(const char *path, demInfo_t **demInfo = NULL);
 int getLocInfo(double lat, double lon, locInfo_t *locinfo);
@@ -99,4 +112,4 @@ int getLocInfo(double lat, double lon, locInfo_t *locinfo);
 void printCache(void);
 void printDems(void);
 
-std::string string_format(const std::string fmt, ...);
+string string_format(const string fmt, ...);
