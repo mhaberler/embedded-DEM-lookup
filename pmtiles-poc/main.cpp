@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,16 +6,21 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include "pmtiles.hpp"
 #include <stdexcept>
 
+#include "pmtiles.hpp"
 #include "compress.hpp"
 #include "pngle.h"
+
+using namespace std;
+using namespace pmtiles;
+
+const char * file_name = PMTILES_PATH;
 
 static void on_init(pngle_t *pngle, uint32_t w, uint32_t h) {
     void *img = malloc(w * h * 3);
     pngle_set_user_data(pngle, img);
-    printf("init w %u h %u\n", w, h);
+    printf("on_init w %u h %u\n", w, h);
 }
 
 static inline double rgb2alt( uint8_t r, uint8_t g, uint8_t b) {
@@ -30,13 +34,6 @@ void on_draw(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uin
     img[offset+1] = rgba[1];
     img[offset+2] = rgba[2];
 }
-
-using namespace std;
-using namespace pmtiles;
-
-const char * file_name = "/Volumes/MAPDATA/mapdata/sonny-dems/DTM_Austria_10m_v2_by_Sonny_LANCZOS_RGB_png.pmtiles";
-
-std::string decompress_gzip(const std::string& str);
 
 void decodeTile(char *map, size_t start, size_t length) {
     pngle_t *pngle = pngle_new();

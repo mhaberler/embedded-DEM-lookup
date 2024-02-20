@@ -150,9 +150,7 @@ static void freeTile(tile_t *tile) {
 static void evictTile(uint64_t key, tile_t *t) {
     LOG_DEBUG("evict %s",keyStr(key).c_str());
     if (t != NULL) {
-        if ( t->buffer != NULL)
-            heap_caps_free(t->buffer);
-        heap_caps_free(t);
+        freeTile(t);
     }
 }
 

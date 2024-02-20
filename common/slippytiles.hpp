@@ -10,6 +10,7 @@ static inline double to_radians(double degrees) {
 static inline double to_degrees(double radians) {
     return radians * (180.0 / M_PI);
 }
+
 typedef struct {
     uint8_t red;
     uint8_t green;
