@@ -12,7 +12,8 @@
 #include "compress.hpp"
 #include "pngle.h"
 
-
+using namespace pmtiles;
+using namespace std;
 
 const char * file_name = PMTILES_PATH;
 
@@ -113,6 +114,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < 4; i++) {
         string dir;
         if (header.internal_compression == COMPRESSION_GZIP) {
+            printf("---- COMPRESSION_GZIP\n");
             dir = decompress_gzip(string(map + dir_offset, dir_length));
         } else {
             dir = string(map + dir_offset, dir_length);

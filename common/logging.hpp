@@ -1,5 +1,7 @@
 #pragma once
-#include <Arduino.h>
+#ifdef ESP32
+    #include <Arduino.h>
+#endif
 
 typedef enum {
     LOG_LEVEL_NONE,
@@ -20,7 +22,11 @@ static inline void set_loglevel(logLevel_t l) {
 #define ___str(s) #s
 
 #ifndef LOG_PRINTF
-    #define LOG_PRINTF Serial.printf
+    #ifdef ARDUINO
+        #define LOG_PRINTF Serial.printf
+    #else
+        #define LOG_PRINTF printf
+    #endif
 #endif
 
 #define LOG_ERROR(format, ...) do { if (log_level >= LOG_LEVEL_ERROR) LOG_PRINTF(format ___str(\n) __VA_OPT__(,) __VA_ARGS__); } while (0);
@@ -28,4 +34,3 @@ static inline void set_loglevel(logLevel_t l) {
 #define LOG_INFO(format, ...) do { if (log_level >= LOG_LEVEL_INFO)LOG_PRINTF(format ___str(\n) __VA_OPT__(,) __VA_ARGS__); } while (0);
 #define LOG_DEBUG(format, ...) do { if (log_level >= LOG_LEVEL_DEBUG) LOG_PRINTF(format ___str(\n) __VA_OPT__(,) __VA_ARGS__); } while (0);
 #define LOG_VERBOSE(format, ...) do { if (log_level >= LOG_LEVEL_VERBOSE) LOG_PRINTF(format ___str(\n) __VA_OPT__(,) __VA_ARGS__); } while (0);
-

@@ -1,8 +1,9 @@
 #include <string>
-#include <sstream>
+#include <string.h>
 #include <stdexcept>
 
 #include "compress.hpp"
+#include "logging.hpp"
 #include "zlib.h"
 
 using std::string;
@@ -14,14 +15,14 @@ using std::stringstream;
 #define MOD_GZIP_ZLIB_CFACTOR    9
 #define MOD_GZIP_ZLIB_BSIZE      8096
 
-std::string decompress_gzip(const std::string& str)
-{
+std::string decompress_gzip(const std::string& str) {
     z_stream zs;                        // z_stream is zlib's control structure
     memset(&zs, 0, sizeof(zs));
 
-    if (inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16) != Z_OK)
-        throw(std::runtime_error("inflateInit failed while decompressing."));
-
+    if (inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16) != Z_OK) {
+        LOG_ERROR("inflateInit failed while decompressing.");
+        return string();
+    }
     zs.next_in = (Bytef*)str.data();
     zs.avail_in = str.size();
 
@@ -40,17 +41,13 @@ std::string decompress_gzip(const std::string& str)
             outstring.append(outbuffer,
                              zs.total_out - outstring.size());
         }
-
     } while (ret == Z_OK);
 
     inflateEnd(&zs);
 
-    if (ret != Z_STREAM_END) {          // an error occurred that was not EOF
-        std::ostringstream oss;
-        oss << "Exception during zlib decompression: (" << ret << ") "
-            << zs.msg;
-        throw(std::runtime_error(oss.str()));
+    if (ret != Z_STREAM_END) {
+        LOG_ERROR("zlib decompression fail");
+        return string();
     }
-
     return outstring;
 }

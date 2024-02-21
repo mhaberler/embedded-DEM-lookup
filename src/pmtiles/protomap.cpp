@@ -21,6 +21,7 @@
 #include "logging.hpp"
 #include "protomap.hpp"
 #include "slippytiles.hpp"
+#include "compress.hpp"
 
 using namespace std;
 using namespace pmtiles;
@@ -35,8 +36,13 @@ static uint8_t pngSignature[] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
 void decodeInit(void) {
 
 }
-
-static const string_view get_bytes( demInfo_t *di, size_t start, size_t length) {
+// const uint8_t COMPRESSION_UNKNOWN = 0x0;
+// const uint8_t COMPRESSION_NONE = 0x1;
+// const uint8_t COMPRESSION_GZIP = 0x2;
+// const uint8_t COMPRESSION_BROTLI = 0x3;
+// const uint8_t COMPRESSION_ZSTD = 0x4;
+static const string_view get_bytes( demInfo_t *di, size_t start, size_t length,
+                                    uint8_t internal_compression = COMPRESSION_NONE) {
 
     if (length > di->buffer_size) {
         size_t n = next_power_of_2(length);
@@ -83,9 +89,8 @@ int addDEM(const char *path, demInfo_t **demInfo) {
     string hdr = string(get_bytes(di, 0, 127));
     LOG_INFO("hdr size %zu magic='%s'", hdr.size(), hdr.substr(0, 7).c_str());
 
-    headerv3 header = deserialize_header(hdr);
-
-    di->tile_size = TILESIZE;
+    di->header = deserialize_header(hdr);
+    di->tile_size = TILESIZE; // FIXME
     di->path = strdup(path);
     dems.push_back(di);
     if (demInfo != NULL) {
@@ -165,6 +170,11 @@ static void pngle_draw_cb(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, ui
     tile->buffer[offset+2] = rgba[2];
 }
 
+static bool isNull(const entryv3 &e) {
+    return ((e.tile_id == 0) &&  (e.offset == 0) &&
+            (e.length == 0) && (e.run_length == 0));
+}
+
 bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
     xyz_t key;
     tile_t *tile = NULL;
@@ -184,13 +194,41 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
 
         TIMESTAMP(query);
         STARTTIME(query);
-
         uint64_t tile_id = zxy_to_tileid(di->max_zoom, tile_x, tile_y);
+        bool found = false;
 
-        bool found;
+        uint64_t dir_offset  = di->header.root_dir_offset;
+        uint64_t dir_length = di->header.root_dir_bytes;
+        entryv3 result;
+
+        for (int i = 0; i < 4; i++) {
+            string dir;
+            if (di->header.internal_compression == COMPRESSION_GZIP) {
+                // dir = decompress_gzip(string(map + dir_offset, dir_length));
+                string comp = string(get_bytes(di, dir_offset, dir_length));
+                dir = decompress_gzip(comp);
+
+            } else {
+                // dir = string(map + dir_offset, dir_length);
+                dir = get_bytes(di, dir_offset, dir_length);
+            }
+            std::vector<entryv3> directory = deserialize_directory(dir);
+            result = find_tile(directory,  tile_id);
+            if (!isNull(result)) {
+                if (result.run_length == 0) {
+                    dir_offset = di->header.leaf_dirs_offset + result.offset;
+                    dir_length = result.length;
+                } else {
+                    // result
+                    found = true;
+                    break;
+                }
+            }
+        }
         if (found) {
-            const uint8_t *blob ;
-            int blob_size;
+            const string_view sv = get_bytes(di, di->header.tile_data_offset + result.offset, result.length);
+            size_t blob_size = result.length;
+            const uint8_t *blob = (const uint8_t *)di->buffer;
 
             PRINT_LAPTIME("blob retrieve %u us", query);
 
