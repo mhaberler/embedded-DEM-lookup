@@ -99,4 +99,3 @@ int getLocInfo(double lat, double lon, locInfo_t *locinfo);
 void printCache(void);
 void printDems(void);
 
-std::string string_format(const std::string fmt, ...);

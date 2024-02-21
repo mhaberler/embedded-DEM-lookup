@@ -21,23 +21,23 @@ void lat_lon_to_pixel(double lat, double  lon, uint32_t zoom, int32_t tile_size,
     int32_t num_tiles = (1 << zoom);
     x = (lon + 180.0) / 360.0 * num_tiles * tile_size;
     y = ((1 - log(tan(to_radians(lat)) + 1 / cos(to_radians(lat))) / M_PI) / 2 * num_tiles * tile_size);
-    LOG_DEBUG("x=%F y=%F",x,y);
+    LOG_DEBUG("x=%.2f y=%.2f",x,y);
 }
 
-void lat_lon_to_tile(double lat, double  lon, uint32_t zoom, int32_t tile_size, int32_t&tile_x, int32_t&tile_y) {
+void lat_lon_to_tile(double lat, double  lon, uint32_t zoom, int32_t tile_size, uint32_t& tile_x, uint32_t& tile_y) {
     double pixel_x, pixel_y;
     lat_lon_to_pixel(lat, lon, zoom, tile_size, pixel_x, pixel_y);
     tile_x = pixel_x / 256;
     tile_y = pixel_y / 256;
-    LOG_DEBUG("tile_x=%d  tile_y=%d pixel_x=%F pixel-y=%F", tile_x,tile_y,pixel_x,pixel_y);
+    LOG_DEBUG("tile_x=%lu  tile_y=%lu pixel_x=%.2f pixel-y=%.2f", tile_x, tile_y, pixel_x, pixel_y);
 }
 
 void compute_pixel_offset(double lat, double  lon, uint32_t zoom, int32_t tile_size,
-                          int32_t&tile_x, int32_t&tile_y, double &offset_x, double &offset_y) {
+                          uint32_t& tile_x, uint32_t& tile_y, uint32_t &offset_x, uint32_t &offset_y) {
     double pixel_x, pixel_y;
     lat_lon_to_tile(lat, lon, zoom, tile_size,  tile_x, tile_y);
     lat_lon_to_pixel(lat, lon, zoom, tile_size, pixel_x, pixel_y);
-    offset_x = pixel_x - tile_x * 256;
-    offset_y = pixel_y - tile_y * 256;
-    LOG_DEBUG("offset_x=%F offset_y=%F", offset_x, offset_y);
+    offset_x = round(pixel_x - tile_x * 256);
+    offset_y = round(pixel_y - tile_y * 256);
+    LOG_DEBUG("offset_x=%lu offset_y=%lu", offset_x, offset_y);
 }

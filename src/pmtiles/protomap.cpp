@@ -1,9 +1,15 @@
-#include <Arduino.h>
 
+#include <Arduino.h>
+#include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <math.h>
+#include <string_view>
 
 #include "pngle.h"
 
@@ -11,14 +17,18 @@
 #include "webp/encode.h"
 #include "webp/types.h"
 
+#include "util.hpp"
 #include "logging.hpp"
 #include "protomap.hpp"
 #include "slippytiles.hpp"
 
+using namespace std;
+using namespace pmtiles;
+
 static void evictTile(uint64_t key, tile_t *t);
 
 static cache::lru_cache<uint64_t, tile_t *> tile_cache(TILECACHE_SIZE, {}, evictTile);
-static std::vector<demInfo_t *> dems;
+static vector<demInfo_t *> dems;
 static uint8_t dbindex;
 static uint8_t pngSignature[] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
 
@@ -26,18 +36,55 @@ void decodeInit(void) {
 
 }
 
+static const string_view get_bytes( demInfo_t *di, size_t start, size_t length) {
+
+    if (length > di->buffer_size) {
+        size_t n = next_power_of_2(length);
+        di->buffer = heap_caps_realloc(di->buffer, n, MALLOC_CAP_SPIRAM);
+        LOG_DEBUG("realloc  %zu -> %zu  %p", di->buffer_size, n, di->buffer );
+
+        di->buffer_size = (di->buffer == NULL) ? 0 : n;
+    }
+    if (length > di->buffer_size) {
+        return string();
+    }
+    off_t ofst = fseek(di->fp, start, SEEK_SET); //lseek(p->fd, iOfst, SEEK_SET);
+    if( ofst != 0 ) {
+        perror("seek");
+        return string();
+    }
+    size_t got = fread(di->buffer, 1, length, di->fp);
+    if (got != length) {
+        LOG_ERROR("read failed: got %zu of %zu, %s", got, length, strerror(errno));
+        return string();
+    }
+    return string_view((const char*)di->buffer, length);
+}
+
 int addDEM(const char *path, demInfo_t **demInfo) {
+    struct	stat st;
+
+    if (stat(path, &st)) {
+        perror(path);
+        return -1;
+    }
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) {
+        perror(path);
+        return -1;
+    }
+    LOG_DEBUG("open '%s' size %zu : %s", path, st.st_size, strerror(errno));
+
     demInfo_t *di = new demInfo_t();
+    di->fp = fp;
+    di->buffer = heap_caps_malloc(BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    di->buffer_size = BUFFER_SIZE;
 
-    // open file
-    // deserialize header
+    string hdr = string(get_bytes(di, 0, 127));
+    LOG_INFO("hdr size %zu magic='%s'", hdr.size(), hdr.substr(0, 7).c_str());
 
-    // int rc = sqlite3_open(path, &di->db);
-    // if (rc != SQLITE_OK) {
-    //     LOG_ERROR("Can't open database %s: rc=%d %s", path, rc, sqlite3_errmsg(di->db));
-    //     delete di;
-    //     return rc;
-    // }
+    headerv3 header = deserialize_header(hdr);
+
     di->tile_size = TILESIZE;
     di->path = strdup(path);
     dems.push_back(di);
@@ -54,7 +101,7 @@ bool demContains(demInfo_t *di, double lat, double lon) {
              (lon_e7 > di->header.min_lon_e7) && (lon_e7 < di->header.max_lon_e7));
 }
 
-std::string keyStr(uint64_t key) {
+string keyStr(uint64_t key) {
     xyz_t k;
     k.key = key;
     return string_format("dem=%d %d/%d/%d",k.entry.index, k.entry.z, k.entry.x, k.entry.y);
@@ -68,8 +115,8 @@ void printCache(void) {
 
 void printDems(void) {
     for (auto d: dems) {
-        LOG_INFO("dem %d: %s bbx=%F/%F..%F/%F dberr=%d tile_err=%d hits=%d misses=%d tilesize=%d",
-                 d->index, d->path, 
+        LOG_INFO("dem %u: %s bbx=%.2f/%.2f..%.2f/%.2f dberr=%u tile_err=%u hits=%u misses=%u tilesize=%u",
+                 d->index, d->path,
                  min_lat(d), min_lon(d),
                  max_lat(d), max_lon(d),
                  d->db_errors, d->tile_errors, d->cache_hits, d->cache_misses, d->tile_size);
@@ -121,8 +168,8 @@ static void pngle_draw_cb(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, ui
 bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
     xyz_t key;
     tile_t *tile = NULL;
-    double offset_x, offset_y;
-    int32_t tile_x, tile_y;
+    uint32_t offset_x, offset_y;
+    uint32_t tile_x, tile_y;
     compute_pixel_offset(lat, lon, di->max_zoom, di->tile_size,
                          tile_x, tile_y, offset_x, offset_y);
 
@@ -138,7 +185,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
         TIMESTAMP(query);
         STARTTIME(query);
 
-        // fetch the missing tile
+        uint64_t tile_id = zxy_to_tileid(di->max_zoom, tile_x, tile_y);
 
         bool found;
         if (found) {
@@ -254,33 +301,12 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
 int getLocInfo(double lat, double lon, locInfo_t *locinfo) {
     for (auto di: dems) {
         if (demContains(di, lat, lon)) {
-            LOG_DEBUG("%F %F contained in %s", lat, lon, di->path);
+            LOG_DEBUG("%.2f %.2f contained in %s", lat, lon, di->path);
             if (lookupTile(di, locinfo, lat, lon)) {
-                return SQLITE_OK;
+                return 0;
             }
         }
     }
     locinfo->status = LS_TILE_NOT_FOUND;
-    return SQLITE_OK;
-}
-
-std::string string_format(const std::string fmt, ...) {
-    int size = ((int)fmt.size()) * 2 + 50;   // Use a rubric appropriate for your code
-    std::string str;
-    va_list ap;
-    while (1) {     // Maximum two passes on a POSIX system...
-        str.resize(size);
-        va_start(ap, fmt);
-        int n = vsnprintf((char *)str.data(), size, fmt.c_str(), ap);
-        va_end(ap);
-        if (n > -1 && n < size) {  // Everything worked
-            str.resize(n);
-            return str;
-        }
-        if (n > -1)  // Needed size returned
-            size = n + 1;   // For null char
-        else
-            size *= 2;      // Guess at a larger size (OS specific)
-    }
-    return str;
+    return 0;
 }

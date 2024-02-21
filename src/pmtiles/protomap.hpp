@@ -1,6 +1,5 @@
 #pragma once
 
-#include <sqlite3.h>
 #include <vector>
 #include <string>
 #include "pmtiles.hpp"
@@ -30,6 +29,10 @@ using namespace pmtiles;
 
 #ifndef TILECACHE_SIZE
     #define TILECACHE_SIZE 5
+#endif
+
+#ifndef BUFFER_SIZE
+    #define BUFFER_SIZE 1024
 #endif
 
 typedef struct {
@@ -84,10 +87,10 @@ typedef struct {
 
 typedef struct {
     const char *path;
+    FILE *fp;
+    void *buffer;
+    size_t buffer_size;
     headerv3 header;
-    // sqlite3 *db;
-    // sqlite3_stmt* stmt;
-    // bbox_t bbox;
     uint32_t db_errors;
     uint32_t tile_errors;
     uint32_t cache_hits;

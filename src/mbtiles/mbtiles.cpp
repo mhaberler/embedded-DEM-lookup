@@ -76,7 +76,7 @@ int getBBox(sqlite3 *db, demInfo_t *di) {
     di->bbox.tr_lon = tilex2long(tc_max, max_zoom);
     di->index = ++dbindex;
 
-    LOG_DEBUG("bbox %F %F %F %F",
+    LOG_DEBUG("bbox %.2f %.2f %.2f %.2f",
               di->bbox.ll_lat, di->bbox.tr_lat,
               di->bbox.ll_lon, di->bbox.tr_lon);
     return SQLITE_OK;
@@ -133,7 +133,7 @@ void printCache(void) {
 
 void printDems(void) {
     for (auto d: dems) {
-        LOG_INFO("dem %d: %s bbx=%F/%F..%F/%F dberr=%d tile_err=%d hits=%d misses=%d tilesize=%d",
+        LOG_INFO("dem %d: %s bbx=%.2f/%.2f..%.2f/%.2f dberr=%d tile_err=%d hits=%d misses=%d tilesize=%d",
                  d->index, d->path,d->bbox.ll_lat,d->bbox.ll_lon, d->bbox.tr_lat,d->bbox.tr_lon,
                  d->db_errors, d->tile_errors, d->cache_hits, d->cache_misses, d->tile_size);
     }
@@ -184,8 +184,7 @@ static void pngle_draw_cb(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, ui
 bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
     xyz_t key;
     tile_t *tile = NULL;
-    double offset_x, offset_y;
-    int32_t tile_x, tile_y;
+    uint32_t offset_x, offset_y, tile_x, tile_y;
     compute_pixel_offset(lat, lon, di->max_zoom, di->tile_size,
                          tile_x, tile_y, offset_x, offset_y);
 
@@ -322,7 +321,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
 int getLocInfo(double lat, double lon, locInfo_t *locinfo) {
     for (auto di: dems) {
         if (demContains(di, lat, lon)) {
-            LOG_DEBUG("%F %F contained in %s", lat, lon, di->path);
+            LOG_DEBUG("%.2f %.2f contained in %s", lat, lon, di->path);
             if (lookupTile(di, locinfo, lat, lon)) {
                 return SQLITE_OK;
             }

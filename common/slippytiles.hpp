@@ -35,6 +35,6 @@ double resolution(double latitude, uint32_t zoom);
 double tilex2long(int32_t x, uint32_t zoom);
 double tiley2lat(int32_t y, uint32_t zoom);
 void compute_pixel_offset(double lat, double  lon, uint32_t zoom, int32_t tile_size,
-                          int32_t&tile_x, int32_t&tile_y, double &offset_x, double &offset_y);
-void lat_lon_to_tile(double lat, double  lon, uint32_t zoom, int32_t tile_size, int32_t&tile_x, int32_t&tile_y);
+                          uint32_t& tile_x, uint32_t& tile_y, uint32_t &offset_x, uint32_t &offset_y);
+void lat_lon_to_tile(double lat, double  lon, uint32_t zoom, int32_t tile_size, uint32_t& tile_x, uint32_t& tile_y);
 void lat_lon_to_pixel(double lat, double  lon, uint32_t zoom, int32_t tile_size, double &x, double &y);

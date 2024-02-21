@@ -12,8 +12,7 @@
 #include "compress.hpp"
 #include "pngle.h"
 
-using namespace std;
-using namespace pmtiles;
+
 
 const char * file_name = PMTILES_PATH;
 
