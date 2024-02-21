@@ -121,6 +121,7 @@ int main(int argc, char *argv[]) {
         }
         std::vector<entryv3> directory = deserialize_directory(dir);
         entryv3 result = find_tile(directory,  tile_id);
+
         if (!isNull(result)) {
             if (result.run_length == 0) {
                 dir_offset = header.leaf_dirs_offset + result.offset;

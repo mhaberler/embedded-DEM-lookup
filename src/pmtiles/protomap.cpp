@@ -33,9 +33,23 @@ static vector<demInfo_t *> dems;
 static uint8_t dbindex;
 static uint8_t pngSignature[] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
 
-void decodeInit(void) {
+static buffer_t io, decomp;
 
+#ifndef IO_BUFFER_SIZE
+    // assuming -40% compression this will fit a compressed tile
+    #define IO_BUFFER_SIZE (TILESIZE * TILESIZE * 6/10)
+#endif
+
+#ifndef DECOMP_BUFFER_SIZE
+    // fit a tile in one go
+    #define DECOMP_BUFFER_SIZE (TILESIZE * TILESIZE *3)
+#endif
+
+void decodeInit(void) {
+    init_buffer(io, IO_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    init_buffer(decomp, DECOMP_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
 }
+
 // const uint8_t COMPRESSION_UNKNOWN = 0x0;
 // const uint8_t COMPRESSION_NONE = 0x1;
 // const uint8_t COMPRESSION_GZIP = 0x2;
@@ -47,22 +61,21 @@ static const string_view get_bytes( demInfo_t *di, size_t start, size_t length,
     if (length > di->buffer_size) {
         size_t n = next_power_of_2(length);
         di->buffer = heap_caps_realloc(di->buffer, n, MALLOC_CAP_SPIRAM);
-        LOG_DEBUG("realloc  %zu -> %zu  %p", di->buffer_size, n, di->buffer );
-
+        LOG_DEBUG("need %zu realloc %zu -> %zu  %p", length, di->buffer_size, n, di->buffer );
         di->buffer_size = (di->buffer == NULL) ? 0 : n;
     }
     if (length > di->buffer_size) {
-        return string();
+        return string_view((const char*)di->buffer, 0);
     }
-    off_t ofst = fseek(di->fp, start, SEEK_SET); //lseek(p->fd, iOfst, SEEK_SET);
-    if( ofst != 0 ) {
+    off_t ofst = fseek(di->fp, start, SEEK_SET);
+    if (ofst != 0 ) {
         perror("seek");
-        return string();
+        return string_view((const char*)di->buffer, 0);
     }
     size_t got = fread(di->buffer, 1, length, di->fp);
     if (got != length) {
         LOG_ERROR("read failed: got %zu of %zu, %s", got, length, strerror(errno));
-        return string();
+        return string_view((const char*)di->buffer, 0);
     }
     return string_view((const char*)di->buffer, length);
 }
@@ -91,7 +104,7 @@ int addDEM(const char *path, demInfo_t **demInfo) {
 
     di->header = deserialize_header(hdr);
     di->tile_size = TILESIZE; // FIXME
-    di->path = strdup(path);
+    di->path = strdup(path);  // FIXME
     dems.push_back(di);
     if (demInfo != NULL) {
         *demInfo = di;
@@ -180,13 +193,13 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
     tile_t *tile = NULL;
     uint32_t offset_x, offset_y;
     uint32_t tile_x, tile_y;
-    compute_pixel_offset(lat, lon, di->max_zoom, di->tile_size,
+    compute_pixel_offset(lat, lon, di->header.max_zoom, di->tile_size,
                          tile_x, tile_y, offset_x, offset_y);
 
     key.entry.index = di->index;
     key.entry.x =  (uint16_t)tile_x;
     key.entry.y =  (uint16_t)tile_y;
-    key.entry.z = di->max_zoom;
+    key.entry.z = di->header.max_zoom;
 
     if (!tile_cache.exists(key.key)) {
         LOG_DEBUG("cache entry %s not found", keyStr(key.key).c_str());
@@ -194,7 +207,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
 
         TIMESTAMP(query);
         STARTTIME(query);
-        uint64_t tile_id = zxy_to_tileid(di->max_zoom, tile_x, tile_y);
+        uint64_t tile_id = zxy_to_tileid(di->header.max_zoom, tile_x, tile_y);
         bool found = false;
 
         uint64_t dir_offset  = di->header.root_dir_offset;
@@ -205,6 +218,8 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
             string dir;
             if (di->header.internal_compression == COMPRESSION_GZIP) {
                 // dir = decompress_gzip(string(map + dir_offset, dir_length));
+                LOG_DEBUG("---- COMPRESSION_GZIP\n");
+
                 string comp = string(get_bytes(di, dir_offset, dir_length));
                 dir = decompress_gzip(comp);
 
@@ -213,6 +228,9 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
                 dir = get_bytes(di, dir_offset, dir_length);
             }
             std::vector<entryv3> directory = deserialize_directory(dir);
+
+            LOG_DEBUG("---- directory: %zu entries per %zu = %zu", directory.size(), sizeof(entryv3), sizeof(entryv3) * directory.size());
+
             result = find_tile(directory,  tile_id);
             if (!isNull(result)) {
                 if (result.run_length == 0) {

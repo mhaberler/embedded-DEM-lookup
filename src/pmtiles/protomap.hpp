@@ -4,23 +4,24 @@
 #include <string>
 #include "pmtiles.hpp"
 #include "lrucache.hpp"
+#include "buffer.hpp"
 #include "slippytiles.hpp"
 
 using namespace std;
 using namespace pmtiles;
 
 #ifdef ESP32_TIMING
-#define xstr(s) str(s)
-#define str(s) #s
-#define TIMESTAMP(x) int64_t x;
-#define STARTTIME(x) do { x = esp_timer_get_time();} while (0);
-#define PRINT_LAPTIME(fmt, x)  do { Serial.printf(fmt xstr(\n), (uint32_t) (esp_timer_get_time() - x)); } while (0);
-#define LAPTIME(x)  ((uint32_t) (esp_timer_get_time() - x))
+    #define xstr(s) str(s)
+    #define str(s) #s
+    #define TIMESTAMP(x) int64_t x;
+    #define STARTTIME(x) do { x = esp_timer_get_time();} while (0);
+    #define PRINT_LAPTIME(fmt, x)  do { Serial.printf(fmt xstr(\n), (uint32_t) (esp_timer_get_time() - x)); } while (0);
+    #define LAPTIME(x)  ((uint32_t) (esp_timer_get_time() - x))
 #else
-#define TIMESTAMP(x)
-#define STARTTIME(x) 
-#define PRINT_LAPTIME(fmt, x) 
-#define LAPTIME(x) 0
+    #define TIMESTAMP(x)
+    #define STARTTIME(x)
+    #define PRINT_LAPTIME(fmt, x)
+    #define LAPTIME(x) 0
 #endif
 
 #ifndef TILESIZE
@@ -31,9 +32,6 @@ using namespace pmtiles;
     #define TILECACHE_SIZE 5
 #endif
 
-#ifndef BUFFER_SIZE
-    #define BUFFER_SIZE 1024
-#endif
 
 typedef struct {
     uint8_t *buffer;
@@ -98,15 +96,22 @@ typedef struct {
     uint16_t tile_size;
     encoding_t encoding;
     uint8_t index;
-    uint8_t max_zoom;
+    // uint8_t max_zoom;
 } demInfo_t;
 
 
-static inline double min_lat(const demInfo_t *d) { return from_e7(d->header.min_lat_e7); }
-static inline double max_lat(const demInfo_t *d) { return from_e7(d->header.max_lat_e7); }
-static inline double min_lon(const demInfo_t *d) { return from_e7(d->header.min_lon_e7); }
-static inline double max_lon(const demInfo_t *d) { return from_e7(d->header.max_lon_e7); }
-
+static inline double min_lat(const demInfo_t *d) {
+    return from_e7(d->header.min_lat_e7);
+}
+static inline double max_lat(const demInfo_t *d) {
+    return from_e7(d->header.max_lat_e7);
+}
+static inline double min_lon(const demInfo_t *d) {
+    return from_e7(d->header.min_lon_e7);
+}
+static inline double max_lon(const demInfo_t *d) {
+    return from_e7(d->header.max_lon_e7);
+}
 
 void decodeInit(void);
 int addDEM(const char *path, demInfo_t **demInfo = NULL);
