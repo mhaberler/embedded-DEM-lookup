@@ -46,8 +46,7 @@ static buffer_t io, decomp;
 #endif
 
 void decodeInit(void) {
-    init_buffer(io, IO_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-    init_buffer(decomp, DECOMP_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+
 }
 
 // const uint8_t COMPRESSION_UNKNOWN = 0x0;
@@ -55,56 +54,66 @@ void decodeInit(void) {
 // const uint8_t COMPRESSION_GZIP = 0x2;
 // const uint8_t COMPRESSION_BROTLI = 0x3;
 // const uint8_t COMPRESSION_ZSTD = 0x4;
-static const string_view get_bytes( demInfo_t *di, size_t start, size_t length,
-                                    uint8_t internal_compression = COMPRESSION_NONE) {
+static int get_bytes( demInfo_t &di,
+                      buffer_t &b,
+                      size_t start,
+                      size_t length,
+                      uint8_t internal_compression = COMPRESSION_NONE) {
 
-    if (length > di->buffer_size) {
-        size_t n = next_power_of_2(length);
-        di->buffer = heap_caps_realloc(di->buffer, n, MALLOC_CAP_SPIRAM);
-        LOG_DEBUG("need %zu realloc %zu -> %zu  %p", length, di->buffer_size, n, di->buffer );
-        di->buffer_size = (di->buffer == NULL) ? 0 : n;
+    void *buf = get_buffer(b, length);
+
+    if (length > buffer_capacity(b)) {
+        return -1;
     }
-    if (length > di->buffer_size) {
-        return string_view((const char*)di->buffer, 0);
-    }
-    off_t ofst = fseek(di->fp, start, SEEK_SET);
+    off_t ofst = fseek(di.fp, start, SEEK_SET);
     if (ofst != 0 ) {
         perror("seek");
-        return string_view((const char*)di->buffer, 0);
+        return -2;
     }
-    size_t got = fread(di->buffer, 1, length, di->fp);
+    size_t got = fread(buf, 1, length, di.fp);
     if (got != length) {
         LOG_ERROR("read failed: got %zu of %zu, %s", got, length, strerror(errno));
-        return string_view((const char*)di->buffer, 0);
+        return -3;
     }
-    return string_view((const char*)di->buffer, length);
+    set_buffer_size(b, got);
+    return 0;
 }
 
 int addDEM(const char *path, demInfo_t **demInfo) {
     struct	stat st;
+    int rc;
 
     if (stat(path, &st)) {
         perror(path);
         return -1;
     }
-    FILE *fp = fopen(path, "rb");
-    if (fp == NULL) {
+
+    LOG_DEBUG("open '%s' size %zu : %s", path, st.st_size, strerror(errno));
+
+    if (buffer_capacity(io) == 0)
+        init_buffer(io, IO_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+
+    demInfo_t *di = new demInfo_t();
+
+    di->fp = fopen(path, "rb");
+    if (di->fp  == NULL) {
         perror(path);
         return -1;
     }
-    LOG_DEBUG("open '%s' size %zu : %s", path, st.st_size, strerror(errno));
 
-    demInfo_t *di = new demInfo_t();
-    di->fp = fp;
-    di->buffer = heap_caps_malloc(BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-    di->buffer_size = BUFFER_SIZE;
+    if (rc = get_bytes(*di, io, 0, 127)) {
+        return -1;
+    }
+    string_view hdr(reinterpret_cast<const char *>(get_buffer(io)), buffer_size(io));
+    LOG_DEBUG("hdr size %zu", hdr.size());
 
-    string hdr = string(get_bytes(di, 0, 127));
-    LOG_INFO("hdr size %zu magic='%s'", hdr.size(), hdr.substr(0, 7).c_str());
+    if (buffer_capacity(decomp) == 0)
+        init_buffer(decomp, DECOMP_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
 
     di->header = deserialize_header(hdr);
     di->tile_size = TILESIZE; // FIXME
     di->path = strdup(path);  // FIXME
+
     dems.push_back(di);
     if (demInfo != NULL) {
         *demInfo = di;
@@ -188,44 +197,45 @@ static bool isNull(const entryv3 &e) {
             (e.length == 0) && (e.run_length == 0));
 }
 
-bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
+bool lookupTile(demInfo_t &di, locInfo_t *locinfo, double lat, double lon) {
     xyz_t key;
+    int rc;
     tile_t *tile = NULL;
     uint32_t offset_x, offset_y;
     uint32_t tile_x, tile_y;
-    compute_pixel_offset(lat, lon, di->header.max_zoom, di->tile_size,
+    compute_pixel_offset(lat, lon, di.header.max_zoom, di.tile_size,
                          tile_x, tile_y, offset_x, offset_y);
 
-    key.entry.index = di->index;
+    key.entry.index = di.index;
     key.entry.x =  (uint16_t)tile_x;
     key.entry.y =  (uint16_t)tile_y;
-    key.entry.z = di->header.max_zoom;
+    key.entry.z = di.header.max_zoom;
 
     if (!tile_cache.exists(key.key)) {
         LOG_DEBUG("cache entry %s not found", keyStr(key.key).c_str());
-        di->cache_misses++;
+        di.cache_misses++;
 
         TIMESTAMP(query);
         STARTTIME(query);
-        uint64_t tile_id = zxy_to_tileid(di->header.max_zoom, tile_x, tile_y);
+        uint64_t tile_id = zxy_to_tileid(di.header.max_zoom, tile_x, tile_y);
         bool found = false;
 
-        uint64_t dir_offset  = di->header.root_dir_offset;
-        uint64_t dir_length = di->header.root_dir_bytes;
+        uint64_t dir_offset  = di.header.root_dir_offset;
+        uint64_t dir_length = di.header.root_dir_bytes;
         entryv3 result;
 
         for (int i = 0; i < 4; i++) {
             string dir;
-            if (di->header.internal_compression == COMPRESSION_GZIP) {
+            if (di.header.internal_compression == COMPRESSION_GZIP) {
                 // dir = decompress_gzip(string(map + dir_offset, dir_length));
                 LOG_DEBUG("---- COMPRESSION_GZIP\n");
 
-                string comp = string(get_bytes(di, dir_offset, dir_length));
-                dir = decompress_gzip(comp);
+                if (!get_bytes(di, io, dir_offset, dir_length))
+                    rc = decompress_gzip(io, decomp);
 
             } else {
                 // dir = string(map + dir_offset, dir_length);
-                dir = get_bytes(di, dir_offset, dir_length);
+                dir = get_bytes(di, io, dir_offset, dir_length);
             }
             std::vector<entryv3> directory = deserialize_directory(dir);
 
@@ -234,7 +244,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
             result = find_tile(directory,  tile_id);
             if (!isNull(result)) {
                 if (result.run_length == 0) {
-                    dir_offset = di->header.leaf_dirs_offset + result.offset;
+                    dir_offset = di.header.leaf_dirs_offset + result.offset;
                     dir_length = result.length;
                 } else {
                     // result
@@ -244,9 +254,9 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
             }
         }
         if (found) {
-            const string_view sv = get_bytes(di, di->header.tile_data_offset + result.offset, result.length);
+            rc = get_bytes(di, decomp, di.header.tile_data_offset + result.offset, result.length);
             size_t blob_size = result.length;
-            const uint8_t *blob = (const uint8_t *)di->buffer;
+            const uint8_t *blob = (const uint8_t *)get_buffer(decomp);
 
             PRINT_LAPTIME("blob retrieve %u us", query);
 
@@ -263,7 +273,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
                                       keyStr(key.key).c_str(), fed, blob_size, pngle_error(pngle));
                             freeTile(tile);
                             tile = NULL;
-                            di->tile_errors++;
+                            di.tile_errors++;
                             locinfo->status = LS_PNG_DECODE_ERROR;
                         } else {
                             pngle_ihdr_t *hdr = pngle_get_ihdr(pngle);
@@ -272,7 +282,7 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
                                 LOG_ERROR("%s: compressed PNG tile",
                                           keyStr(key.key).c_str());
                             } else {
-                                di->tile_size = pngle_get_width(pngle);
+                                di.tile_size = pngle_get_width(pngle);
                                 tile = (tile_t *) pngle_get_user_data(pngle);
                                 tile_cache.put(key.key, tile);
                                 locinfo->status = LS_VALID;
@@ -321,10 +331,10 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
                                 LOG_ERROR("%s: WebPDecode failed", keyStr(key.key).c_str());
                                 freeTile(tile);
                                 tile = NULL;
-                                di->tile_errors++;
+                                di.tile_errors++;
                                 locinfo->status = LS_WEBP_DECODE_ERROR;
                             } else {
-                                di->tile_size = config.input.width;
+                                di.tile_size = config.input.width;
                                 tile_cache.put(key.key, tile);
                                 locinfo->status = LS_VALID;
                             }
@@ -342,12 +352,12 @@ bool lookupTile(demInfo_t *di, locInfo_t *locinfo, double lat, double lon) {
         LOG_DEBUG("cache entry %s found: ", keyStr(key.key).c_str());
         tile = tile_cache.get(key.key);
         locinfo->status = LS_VALID;
-        di->cache_hits++;
+        di.cache_hits++;
     }
     // assert(tile->buffer != NULL);
 
     if (locinfo->status == LS_VALID) {
-        size_t i = round(offset_x)  + round(offset_y) * di->tile_size;
+        size_t i = round(offset_x)  + round(offset_y) * di.tile_size;
         locinfo->elevation = rgb2alt(&tile->buffer[i * 3] );
         return true;
     }
@@ -358,7 +368,7 @@ int getLocInfo(double lat, double lon, locInfo_t *locinfo) {
     for (auto di: dems) {
         if (demContains(di, lat, lon)) {
             LOG_DEBUG("%.2f %.2f contained in %s", lat, lon, di->path);
-            if (lookupTile(di, locinfo, lat, lon)) {
+            if (lookupTile(*di, locinfo, lat, lon)) {
                 return 0;
             }
         }

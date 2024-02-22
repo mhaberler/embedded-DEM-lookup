@@ -16,6 +16,7 @@ using namespace pmtiles;
 using namespace std;
 
 const char * file_name = PMTILES_PATH;
+buffer_t io, decomp;
 
 static void on_init(pngle_t *pngle, uint32_t w, uint32_t h) {
     void *img = malloc(w * h * 3);
@@ -35,18 +36,18 @@ void on_draw(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uin
     img[offset+2] = rgba[2];
 }
 
-void decodeTile(char *map, size_t start, size_t length) {
+void decodeTile(void *start, size_t length) {
     pngle_t *pngle = pngle_new();
 
     pngle_set_init_callback(pngle, on_init);
     pngle_set_draw_callback(pngle, on_draw);
 
-    int fed = pngle_feed(pngle, map + start, length);
+    int fed = pngle_feed(pngle, start, length);
     if (fed < 0) {
         fprintf(stderr, "%s\n", pngle_error(pngle));
         exit(1);
     }
-    printf("size %u fed %d\n", length, fed);
+    printf("size %u fed %zu\n", length, fed);
     uint8_t *img = (uint8_t *) pngle_get_user_data(pngle);
     int x = 27;
     int y = 6;
@@ -68,7 +69,38 @@ bool isNull(const entryv3 &e) {
             (e.length == 0) && (e.run_length == 0));
 }
 
+string buffer2str(const buffer_t &b) {
+    return string(reinterpret_cast<const char *>(b.buffer), b.size);
+}
+
+static int get_bytes( FILE *fp,
+                      buffer_t &b,
+                      size_t start,
+                      size_t length,
+                      uint8_t internal_compression = COMPRESSION_NONE) {
+
+    void *buf = get_buffer(b, length);
+
+    if (length > buffer_capacity(b)) {
+        return -1;
+    }
+
+    off_t ofst = fseek(fp, start, SEEK_SET);
+    if (ofst != 0 ) {
+        perror("seek");
+        return -2;
+    }
+    size_t got = fread(buf, 1, length, fp);
+    if (got != length) {
+        LOG_ERROR("read failed: got %zu of %zu, %s", got, length, strerror(errno));
+        return -3;
+    }
+    set_buffer_size(b, got);
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
+    set_loglevel(LOG_LEVEL_VERBOSE);
     struct stat st;
     if (argc > 1)
         file_name = argv[1];
@@ -81,8 +113,15 @@ int main(int argc, char *argv[]) {
         perror(file_name);
         exit(1);
     }
-    char *map = static_cast<char *>(mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0));
-    printf("size %lld buf %p\n", st.st_size, map);
+    init_buffer(io, 16384, 0);
+    init_buffer(decomp, 16384*32, 0);
+
+    FILE *fp = fopen(file_name, "rb");
+    if (fp == nullptr) {
+        perror(file_name);
+        exit(1);
+    }
+    LOG_DEBUG("open '%s' size %zu : %s", file_name, st.st_size, strerror(errno));
 
     // test example - knowns:
     //   lat lon
@@ -106,18 +145,33 @@ int main(int argc, char *argv[]) {
     uint64_t tile_id = zxy_to_tileid(13, 4442, 2877);
     printf("tid %lld\n", tile_id);
 
-    headerv3 header = deserialize_header(string(map, 127));
+    if (get_bytes(fp, io, 0, 127)) {
+        perror("get_bytes");
+        exit(1);
+    }
+
+    string hdr = buffer2str(io);
+    headerv3 header = deserialize_header(hdr);
 
     uint64_t dir_offset  = header.root_dir_offset;
     uint64_t dir_length = header.root_dir_bytes;
 
     for (int i = 0; i < 4; i++) {
         string dir;
+        if (get_bytes(fp, io, dir_offset, dir_length)) {
+            perror("get_bytes");
+            exit(1);
+        }
+        print_buffer("io", io);
+
         if (header.internal_compression == COMPRESSION_GZIP) {
             printf("---- COMPRESSION_GZIP\n");
-            dir = decompress_gzip(string(map + dir_offset, dir_length));
+            set_buffer_size(decomp, 0);
+            int32_t rc = decompress_gzip(io, decomp);
+            print_buffer("decomp", decomp);
+            dir = buffer2str(decomp);
         } else {
-            dir = string(map + dir_offset, dir_length);
+            dir =  buffer2str(io);
         }
         std::vector<entryv3> directory = deserialize_directory(dir);
         entryv3 result = find_tile(directory,  tile_id);
@@ -128,7 +182,11 @@ int main(int argc, char *argv[]) {
                 dir_length = result.length;
             } else {
                 // result
-                decodeTile(map, header.tile_data_offset + result.offset, result.length);
+                if (get_bytes(fp, io, header.tile_data_offset + result.offset, result.length)) {
+                    perror("get_bytes");
+                    exit(1);
+                }
+                decodeTile(get_buffer(io), buffer_size(io));
                 break;
             }
         }

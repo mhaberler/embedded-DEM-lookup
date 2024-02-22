@@ -86,8 +86,6 @@ typedef struct {
 typedef struct {
     const char *path;
     FILE *fp;
-    void *buffer;
-    size_t buffer_size;
     headerv3 header;
     uint32_t db_errors;
     uint32_t tile_errors;

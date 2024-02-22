@@ -3,6 +3,7 @@
 #include <stdexcept>
 
 #include "compress.hpp"
+#include "buffer.hpp"
 #include "logging.hpp"
 #include "zlib.h"
 
@@ -15,39 +16,36 @@ using std::stringstream;
 #define MOD_GZIP_ZLIB_CFACTOR    9
 #define MOD_GZIP_ZLIB_BSIZE      8096
 
-std::string decompress_gzip(const std::string& str) {
+int32_t decompress_gzip(buffer_t &in, buffer_t &out) {
+    // std::string decompress_gzip(const std::string& str) {
     z_stream zs;                        // z_stream is zlib's control structure
     memset(&zs, 0, sizeof(zs));
 
     if (inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16) != Z_OK) {
         LOG_ERROR("inflateInit failed while decompressing.");
-        return string();
+        return -1;
     }
-    zs.next_in = (Bytef*)str.data();
-    zs.avail_in = str.size();
+    zs.next_in = reinterpret_cast<Bytef *>(get_buffer(in));
+    zs.avail_in = buffer_size(in);
 
     int ret;
-    char outbuffer[32768];
-    std::string outstring;
 
+    Bytef *buffer = reinterpret_cast<Bytef*>(get_buffer(out));
+    uInt avail = buffer_capacity(out);
     // get the decompressed bytes blockwise using repeated calls to inflate
     do {
-        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
-        zs.avail_out = sizeof(outbuffer);
-
+        zs.next_out = buffer + zs.total_out;
+        zs.avail_out = avail - zs.total_out;;
         ret = inflate(&zs, 0);
-
-        if (outstring.size() < zs.total_out) {
-            outstring.append(outbuffer,
-                             zs.total_out - outstring.size());
-        }
     } while (ret == Z_OK);
 
     inflateEnd(&zs);
 
     if (ret != Z_STREAM_END) {
         LOG_ERROR("zlib decompression fail");
-        return string();
+        return -2;
     }
-    return outstring;
+    LOG_DEBUG("zlib decompression OK: %ul", zs.total_out);
+    set_buffer_size(out, zs.total_out);
+    return zs.total_out;
 }

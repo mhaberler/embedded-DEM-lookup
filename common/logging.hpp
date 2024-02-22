@@ -1,5 +1,5 @@
 #pragma once
-#ifdef ESP32
+#ifdef EMBEDDED
     #include <Arduino.h>
 #endif
 
@@ -22,7 +22,7 @@ static inline void set_loglevel(logLevel_t l) {
 #define ___str(s) #s
 
 #ifndef LOG_PRINTF
-    #ifdef ARDUINO
+    #ifdef EMBEDDED
         #define LOG_PRINTF Serial.printf
     #else
         #define LOG_PRINTF printf

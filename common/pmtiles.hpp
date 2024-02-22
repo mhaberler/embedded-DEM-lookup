@@ -9,6 +9,7 @@
 #include <functional>
 #include <algorithm>
 #include <limits> // for std::numeric_limits<>
+#include <string_view>
 
 namespace pmtiles {
 
@@ -136,7 +137,14 @@ inline void copy_from_lsb(T* ptr, const std::string &s, size_t offset) {
 	swap_byte_order_if_msb(ptr);
 }
 
-inline headerv3 deserialize_header(const std::string &s) {
+template<class T>
+inline void copy_from_lsb(T* ptr, const std::string_view &s, size_t offset) {
+    s.copy(reinterpret_cast<char *>(ptr), sizeof(T), offset);
+	swap_byte_order_if_msb(ptr);
+}
+
+
+inline headerv3 deserialize_header(const std::string_view &s) {
 	if (s.substr(0, 7) != "PMTiles") {
 		throw pmtiles_magic_number_exception{};
 	}
