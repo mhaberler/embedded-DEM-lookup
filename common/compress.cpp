@@ -17,26 +17,30 @@ using std::stringstream;
 #define MOD_GZIP_ZLIB_BSIZE      8096
 
 int32_t decompress_gzip(buffer_t &in, buffer_t &out) {
-    // std::string decompress_gzip(const std::string& str) {
-    z_stream zs;                        // z_stream is zlib's control structure
-    memset(&zs, 0, sizeof(zs));
-
-    if (inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16) != Z_OK) {
-        LOG_ERROR("inflateInit failed while decompressing.");
-        return -1;
-    }
-    zs.next_in = reinterpret_cast<Bytef *>(get_buffer(in));
-    zs.avail_in = buffer_size(in);
-
+    #if 0
     int ret;
-
-    Bytef *buffer = reinterpret_cast<Bytef*>(get_buffer(out));
-    uInt avail = buffer_capacity(out);
-    // get the decompressed bytes blockwise using repeated calls to inflate
+    z_stream zs = {};
+    ret = inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16);
+    if (ret != Z_OK) {
+        LOG_ERROR("inflateInit failed while decompressing. %d", ret);
+        return ret;
+    }
+    zs.avail_in = buffer_size(in);
+    zs.next_in = reinterpret_cast<Bytef *>(get_buffer(in));
     do {
-        zs.next_out = buffer + zs.total_out;
-        zs.avail_out = avail - zs.total_out;;
-        ret = inflate(&zs, 0);
+        strm.avail_out = CHUNK;
+        strm.next_out = out;
+
+        // Bytef *buffer;
+        // if ((int32_t)buffer_capacity(out) - zs.total_out < 0) {
+        //     buffer = reinterpret_cast<Bytef*>(get_buffer(out, zs.total_out * 2));
+        // } else {
+        //     buffer = reinterpret_cast<Bytef*>(get_buffer(out));
+        // }
+        // uInt avail = buffer_capacity(out);
+        // zs.next_out = buffer + zs.total_out;
+        // zs.avail_out = avail - zs.total_out;;
+        // ret = inflate(&zs, 0);
     } while (ret == Z_OK);
 
     inflateEnd(&zs);
@@ -45,7 +49,8 @@ int32_t decompress_gzip(buffer_t &in, buffer_t &out) {
         LOG_ERROR("zlib decompression fail");
         return -2;
     }
-    LOG_DEBUG("zlib decompression OK: %ul", zs.total_out);
+    LOG_DEBUG("zlib decompression OK: %u", zs.total_out);
     set_buffer_size(out, zs.total_out);
     return zs.total_out;
+    #endif
 }

@@ -101,6 +101,7 @@ static int get_bytes( FILE *fp,
 
 int main(int argc, char *argv[]) {
     set_loglevel(LOG_LEVEL_VERBOSE);
+    setbuf(stdout, NULL);
     struct stat st;
     if (argc > 1)
         file_name = argv[1];
@@ -114,7 +115,7 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
     init_buffer(io, 16384, 0);
-    init_buffer(decomp, 16384*32, 0);
+    init_buffer(decomp, 16384, 0);
 
     FILE *fp = fopen(file_name, "rb");
     if (fp == nullptr) {

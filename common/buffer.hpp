@@ -4,6 +4,7 @@
     #include <Arduino.h>
 #else
     #define MALLOC_CAP_SPIRAM 0
+    #define MALLOC_CAP_8BIT 0
 #endif
 #include <stdint.h>
 #include "logging.hpp"
@@ -71,6 +72,11 @@ static inline void *get_buffer(buffer_t &b, size_t size = 0) {
 static inline size_t buffer_size(const buffer_t &b) {
     return b.size;
 }
+
+// static inline size_t buffer_size(const buffer_t &b) {
+//     return b.size;
+// }
+
 
 static inline bool set_buffer_size(buffer_t &b, size_t size) {
     if (size > b.capacity) {
