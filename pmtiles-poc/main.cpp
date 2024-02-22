@@ -17,6 +17,7 @@
 #include "pngle.h"
 
 #include "pmtiles.hpp"
+#include "psram_allocator.hpp"
 
 #define MIN_ALLOC_SIZE 8192
 #define MOD_GZIP_ZLIB_WINDOWSIZE 15
@@ -40,6 +41,22 @@ static inline size_t alloc_size(size_t s) {
 
 using namespace pmtiles;
 using namespace std;
+
+typedef enum {
+    PM_OK = 0,
+    PM_IOBUF_ALLOC_FAILED = -1,
+    PM_SEEK_FAILED = -2,
+    PM_READ_FAILED = -3,
+    PM_DEFLATE_INIT_FAILED = -4,
+    PM_ZLIB_DECOMP_FAILED = -5,
+
+} pmErrno_t;
+
+void *io_buffer;
+size_t io_size;
+esp32::psram::string decomp;
+esp32::psram::string io;
+int pmerrno;
 
 const char * file_name = PMTILES_PATH;
 
@@ -93,59 +110,45 @@ bool isNull(const entryv3 &e) {
     return ((e.tile_id == 0) &&  (e.offset == 0) &&
             (e.length == 0) && (e.run_length == 0));
 }
-typedef enum {
-    PM_OK = 0,
-    PM_IOBUF_ALLOC_FAILED = -1,
-    PM_SEEK_FAILED = -2,
-    PM_READ_FAILED = -3,
-    PM_DEFLATE_INIT_FAILED = -4,
-    PM_ZLIB_DECOMP_FAILED = -5,
 
-} pmErrno_t;
 
-void *io_buffer;
-size_t io_size;
-void *decomp_buffer;
-size_t decomp_size;
-int pmerrno;
+int32_t decompress_gzip(const string_view str, esp32::psram::string &outstring) {
+    z_stream zs;                        // z_stream is zlib's control structure
+    memset(&zs, 0, sizeof(zs));
 
-void *decompress_gzip(const void *in, size_t size, size_t &got) {
-    z_stream zs = {};
-    int rc = inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16);
-    if (rc != Z_OK) {
-        LOG_ERROR("inflateInit failed: %d", rc);
-        pmerrno = PM_DEFLATE_INIT_FAILED;
-        return nullptr;
-    }
+    if (inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16) != Z_OK)
+        throw(std::runtime_error("inflateInit failed while decompressing."));
 
-    zs.next_in = (Bytef*)in;
-    zs.avail_in = size;
-    size_t remain = decomp_size;
+    zs.next_in = (Bytef*)str.data();
+    zs.avail_in = str.size();
 
+    int ret;
+    char outbuffer[32768];
+
+    // get the decompressed bytes blockwise using repeated calls to inflate
     do {
-        zs.next_out = (Bytef*)(((char *)decomp_buffer) + zs.total_out);
-        zs.avail_out = remain;
-        rc = inflate(&zs, 0);
+        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
+        zs.avail_out = sizeof(outbuffer);
 
-        if (decomp_size < zs.total_out) {
-            size_t na = alloc_size(zs.total_out);
-            LOG_DEBUG("realloc %zu -> %zu", decomp_size, na);
-            decomp_buffer = realloc(decomp_buffer, na);
-            // FIXME check nullptr
-            decomp_size = na;
-            remain = decomp_size - zs.total_out;
+        ret = inflate(&zs, 0);
+
+        if (outstring.size() < zs.total_out) {
+            outstring.append(outbuffer,
+                             zs.total_out - outstring.size());
         }
-    } while (rc == Z_OK);
+
+    } while (ret == Z_OK);
 
     inflateEnd(&zs);
 
-    if (rc != Z_STREAM_END) {          // an error occurred that was not EOF
-        LOG_ERROR("zlib decompression failed: %d", rc);
-        pmerrno = PM_ZLIB_DECOMP_FAILED;
-        return nullptr;
+    if (ret != Z_STREAM_END) {          // an error occurred that was not EOF
+        std::ostringstream oss;
+        oss << "Exception during zlib decompression: (" << ret << ") "
+            << zs.msg;
+        throw(std::runtime_error(oss.str()));
     }
-    got = zs.total_out;
-    return decomp_buffer;
+
+    return ret;
 }
 
 void *get_bytes(FILE *fp,
@@ -221,8 +224,9 @@ int main(int argc, char *argv[]) {
     // init w 256 h 256
     // size 79198 fed 79198
     // elevation=863.3
-    decomp_buffer = realloc(decomp_buffer, 1024);
-    decomp_size = 1024;
+    decomp.reserve(1024);
+    decomp.reserve(32768);
+    io.reserve(16384);
 
     uint64_t tile_id = zxy_to_tileid(13, 4442, 2877);
     printf("tid %lld\n", tile_id);
@@ -238,21 +242,20 @@ int main(int argc, char *argv[]) {
     uint64_t dir_length = header.root_dir_bytes;
 
     for (int i = 0; i < 4; i++) {
-        string_view dir;
         if ((p = get_bytes(fp, dir_offset, dir_length)) == nullptr) {
             perror("get_bytes");
             break;
         }
 
         std::vector<entryv3> directory;
-
+        decomp.clear();
         if (header.internal_compression == COMPRESSION_GZIP) {
             printf("---- COMPRESSION_GZIP\n");
-            size_t got;
-            void *s = decompress_gzip(p, dir_length, got);
-            directory = deserialize_directory(string((char *)s, got));
+
+            rc = decompress_gzip(string_view((char *)p, dir_length), decomp);
+            directory = deserialize_directory(string_view(decomp));
         } else {
-            directory = deserialize_directory(string((char *)p, dir_length));
+            directory = deserialize_directory(string_view((char *)p, dir_length));
         }
 
         entryv3 result = find_tile(directory,  tile_id);
