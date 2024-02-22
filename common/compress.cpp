@@ -1,56 +1,51 @@
+
+#include "zlib.h"
 #include <string>
-#include <string.h>
-#include <stdexcept>
+#include <string_view>
 
 #include "compress.hpp"
 #include "buffer.hpp"
 #include "logging.hpp"
+
 #include "zlib.h"
 
 using std::string;
 using std::stringstream;
 
-// Found these here http://mail-archives.apache.org/mod_mbox/trafficserver-dev/201110.mbox/%3CCACJPjhYf=+br1W39vyazP=ix
-//eQZ-4Gh9-U6TtiEdReG3S4ZZng@mail.gmail.com%3E
 #define MOD_GZIP_ZLIB_WINDOWSIZE 15
-#define MOD_GZIP_ZLIB_CFACTOR    9
-#define MOD_GZIP_ZLIB_BSIZE      8096
 
-int32_t decompress_gzip(buffer_t &in, buffer_t &out) {
-    #if 0
-    int ret;
+int32_t decompress_gzip(const buffer_t &in, buffer_t &out) {
     z_stream zs = {};
-    ret = inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16);
-    if (ret != Z_OK) {
-        LOG_ERROR("inflateInit failed while decompressing. %d", ret);
-        return ret;
+    int rc = inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16);
+    if (rc != Z_OK) {
+        LOG_ERROR("inflateInit failed: %d", rc);
+        return rc;
     }
-    zs.avail_in = buffer_size(in);
-    zs.next_in = reinterpret_cast<Bytef *>(get_buffer(in));
-    do {
-        strm.avail_out = CHUNK;
-        strm.next_out = out;
 
-        // Bytef *buffer;
-        // if ((int32_t)buffer_capacity(out) - zs.total_out < 0) {
-        //     buffer = reinterpret_cast<Bytef*>(get_buffer(out, zs.total_out * 2));
-        // } else {
-        //     buffer = reinterpret_cast<Bytef*>(get_buffer(out));
-        // }
-        // uInt avail = buffer_capacity(out);
-        // zs.next_out = buffer + zs.total_out;
-        // zs.avail_out = avail - zs.total_out;;
-        // ret = inflate(&zs, 0);
-    } while (ret == Z_OK);
+    zs.next_in = (Bytef*)in.data();
+    zs.avail_in = in.size();
+
+    char *outbuffer =reinterpret_cast<char *>(malloc(32768));
+
+    // get the decompressed bytes blockwise using repeated calls to inflate
+    do {
+        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
+        zs.avail_out = sizeof(32768);
+
+        rc = inflate(&zs, 0);
+
+        if (out.size() < zs.total_out) {
+            std::string_view b(outbuffer, zs.total_out - out.size());
+            out.insert(std::end(out), std::begin(b), std::end(b));
+            // out.push_back(std::vector(outbuffer, zs.total_out - out.size()));
+        }
+
+    } while (rc == Z_OK);
 
     inflateEnd(&zs);
 
-    if (ret != Z_STREAM_END) {
-        LOG_ERROR("zlib decompression fail");
-        return -2;
+    if (rc != Z_STREAM_END) {          // an error occurred that was not EOF
+        LOG_ERROR("zlib decompressio failed: %d", rc);
     }
-    LOG_DEBUG("zlib decompression OK: %u", zs.total_out);
-    set_buffer_size(out, zs.total_out);
-    return zs.total_out;
-    #endif
+    return rc;
 }

@@ -486,6 +486,7 @@ struct malformed_directory_exception : std::exception {
 
 // takes an uncompressed byte buffer
 inline std::vector<entryv3> deserialize_directory(const std::string &decompressed) {
+//inline std::vector<entryv3> deserialize_directory(const std::string_view decompressed) {
 	const char *t = decompressed.data();
 	const char *end = t + decompressed.size();
 

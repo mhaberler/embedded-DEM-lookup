@@ -6,6 +6,7 @@
 #endif
 
 #include <memory>
+#include "logging.hpp"
 
 namespace esp32 {
 namespace psram {
@@ -37,15 +38,16 @@ template <typename T> class allocator {
     }
 
     pointer allocate(size_type n, const void *hint = 0) {
-
+        LOG_DEBUG("%s %zu", __FUNCTION__, n);
 #ifdef ESP32
         return static_cast<pointer>(heap_caps_malloc(n * sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
 #else
-        return static_cast<pointer>(malloc(n * sizeof(T));
+        return static_cast<pointer>(malloc(n * sizeof(T)));
 #endif
     }
 
     void deallocate(pointer p, size_type n) {
+        LOG_DEBUG("%s %p %zu", __FUNCTION__, p, n);
 #ifdef ESP32
         heap_caps_free(p);
 #else
@@ -58,12 +60,14 @@ template <typename T> class allocator {
     }
 
     void destroy(pointer p) {
+        LOG_DEBUG("%s %p", __FUNCTION__, p);
         p->~T();
     }
 };
 
 struct deleter {
     void operator()(void *p) const {
+        LOG_DEBUG("%s %p", __FUNCTION__, p);
 #ifdef ESP32
         heap_caps_free(p);
 #else
@@ -73,6 +77,7 @@ struct deleter {
 };
 
 template <class T, class... Args> std::unique_ptr<T, deleter> make_unique(Args &&...args) {
+    LOG_DEBUG("%s %zu", __FUNCTION__, sizeof(T));
 #ifdef ESP32
     auto p = heap_caps_malloc(sizeof(T), MALLOC_CAP_SPIRAM);
 #else
@@ -83,14 +88,16 @@ template <class T, class... Args> std::unique_ptr<T, deleter> make_unique(Args &
 
 struct json_allocator {
     void *allocate(size_t size) {
+        LOG_DEBUG("%s %zu", __FUNCTION__, size);
 #ifdef ESP32
-        return heap_caps_malloc(n * sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-        return malloc(n * sizeof(T));
+        return malloc(size);
 #endif
     }
 
     void deallocate(void *pointer) {
+        LOG_DEBUG("%s %p", __FUNCTION__, pointer);
 #ifdef ESP32
         heap_caps_free(pointer);
 #else
@@ -99,6 +106,8 @@ struct json_allocator {
     }
 
     void *reallocate(void *ptr, size_t new_size) {
+        LOG_DEBUG("%s %p %zu", __FUNCTION__, ptr, new_size);
+
 #ifdef ESP32
         return heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
