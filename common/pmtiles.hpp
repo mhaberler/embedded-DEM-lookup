@@ -34,7 +34,20 @@ const uint8_t PMERR_TILE_ZOOM_OVERFLOW = -5;
 const uint8_t PMERR_TILE_XY_OUTSIDE_ZOOM = -6;
 const uint8_t PMERR_MALFORMED_DIRECTORY = -7;
 
-extern bool pmexcept;
+//#define PMTILES_NO_EXCEPTIONS
+
+#ifdef PMTILES_NO_EXCEPTIONS
+#define PMTILES_EXCEPTION(e, errcode, returnvalue) \
+    pmerr = errcode; \
+    return returnvalue;
+#define PMTILES_EXCEPTION_OVF(e, errcode, returnvalue) \
+    pmerr = errcode; \
+    return returnvalue;	
+#else
+#define PMTILES_EXCEPTION(e, errcode, returnvalue) throw e
+#define PMTILES_EXCEPTION_OVF(e, errcode, returnvalue) throw std::overflow_error(e)
+#endif
+
 extern uint8_t pmerrno;
 
 #ifdef PMTILES_MSB
@@ -156,16 +169,10 @@ inline void copy_from_lsb(T* ptr, const std::string_view &s, size_t offset) {
 inline headerv3 deserialize_header(const std::string_view &s,
                                    uint8_t &pmerr = pmerrno) {
     if (s.substr(0, 7) != "PMTiles") {
-        if (pmexcept)
-            throw pmtiles_magic_number_exception{};
-        pmerr = PMERR_BAD_MAGIC;
-        return headerv3();
+        PMTILES_EXCEPTION(pmtiles_magic_number_exception{}, PMERR_BAD_MAGIC, headerv3());
     }
     if (s.size() != 127 || s[7] != 0x3) {
-        if (pmexcept)
-            throw pmtiles_version_exception{};
-        pmerr = PMERR_BAD_VERSION;
-        return headerv3();
+        PMTILES_EXCEPTION(pmtiles_version_exception{}, PMERR_BAD_VERSION, headerv3());
     }
     headerv3 h;
     copy_from_lsb(&h.root_dir_offset, s, 8);
@@ -317,10 +324,7 @@ uint64_t decode_varint_impl(const char **data, const char *end,
             if (b >= 0) {
                 break;
             }
-            if (pmexcept)
-                throw pmtiles_magic_number_exception{};
-            pmerr = PMERR_VARINT_TOO_LONG;
-            return 0;
+            PMTILES_EXCEPTION(pmtiles_magic_number_exception{}, PMERR_VARINT_TOO_LONG, 0);
         } while (false);
     } else {
         unsigned int shift = 0;
@@ -329,10 +333,7 @@ uint64_t decode_varint_impl(const char **data, const char *end,
             shift += 7;
         }
         if (p == iend) {
-            if (pmexcept)
-                throw end_of_buffer_exception{};
-            pmerr = PMERR_END_OF_BUFFER;
-            return 0;
+            PMTILES_EXCEPTION(end_of_buffer_exception{}, PMERR_END_OF_BUFFER, 0);
         }
         val |= uint64_t(*p++) << shift;
     }
@@ -445,24 +446,15 @@ inline zxy tileid_to_zxy(uint64_t tileid, uint8_t &pmerr = pmerrno) {
         }
         acc += num_tiles;
     }
-    if (pmexcept)
-        throw std::overflow_error("tile zoom exceeds 64-bit limit");
-    pmerr = PMERR_TILE_ZOOM_OVERFLOW;
-    return zxy(0,0,0);
+    PMTILES_EXCEPTION_OVF("tile zoom exceeds 64-bit limit", PMERR_TILE_ZOOM_OVERFLOW, zxy(0,0,0));
 }
 
 inline uint64_t zxy_to_tileid(uint8_t z, uint32_t x, uint32_t y, uint8_t &pmerr = pmerrno) {
     if (z > 31) {
-        if (pmexcept)
-            throw std::overflow_error("tile zoom exceeds 64-bit limit");
-        pmerr = PMERR_TILE_ZOOM_OVERFLOW;
-        return 0;
+        PMTILES_EXCEPTION_OVF("tile zoom exceeds 64-bit limit", PMERR_TILE_ZOOM_OVERFLOW, 0);
     }
     if (x > (1U << z) - 1U || y > (1U << z) - 1U) {
-        if (pmexcept)
-            throw std::overflow_error("tile x/y outside zoom level bounds");
-        pmerr = PMERR_TILE_XY_OUTSIDE_ZOOM;
-        return 0;
+        PMTILES_EXCEPTION_OVF("tile x/y outside zoom level bounds", PMERR_TILE_XY_OUTSIDE_ZOOM, 0);
     }
     uint64_t acc = 0;
     for (uint8_t t_z = 0; t_z < z; t_z++) acc += (1LL << t_z) * (1LL << t_z);
@@ -517,7 +509,6 @@ struct malformed_directory_exception : std::exception {
 };
 
 // takes an uncompressed byte buffer
-//inline std::vector<entryv3> deserialize_directory(const std::string &decompressed) {
 inline std::vector<entryv3> deserialize_directory(const std::string_view decompressed, uint8_t &pmerr = pmerrno) {
     const char *t = decompressed.data();
     const char *end = t + decompressed.size();
@@ -526,10 +517,7 @@ inline std::vector<entryv3> deserialize_directory(const std::string_view decompr
     // Sanity check to avoid excessive memory allocation attempt:
     // each directory entry takes at least 4 bytes
     if (num_entries_64bit / 4U > decompressed.size()) {
-        if (pmexcept)
-            throw malformed_directory_exception();
-        pmerr = PMERR_MALFORMED_DIRECTORY;
-        return std::vector<entryv3>();
+        PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::vector<entryv3>());
     }
     const size_t num_entries = static_cast<size_t>(num_entries_64bit);
 
@@ -540,10 +528,7 @@ inline std::vector<entryv3> deserialize_directory(const std::string_view decompr
     for (size_t i = 0; i < num_entries; i++) {
         const uint64_t val = decode_varint(&t, end);
         if (val > std::numeric_limits<uint64_t>::max() - last_id) {
-            if (pmexcept)
-                throw malformed_directory_exception();
-            pmerr = PMERR_MALFORMED_DIRECTORY;
-            return std::vector<entryv3>();
+            PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::vector<entryv3>());
         }
         const uint64_t tile_id = last_id + val;
         result[i].tile_id = tile_id;
@@ -553,10 +538,7 @@ inline std::vector<entryv3> deserialize_directory(const std::string_view decompr
     for (size_t i = 0; i < num_entries; i++) {
         const uint64_t val = decode_varint(&t, end);
         if (val > std::numeric_limits<uint32_t>::max()) {
-            if (pmexcept)
-                throw malformed_directory_exception();
-            pmerr = PMERR_MALFORMED_DIRECTORY;
-            return std::vector<entryv3>();
+            PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::vector<entryv3>());
         }
         result[i].run_length = static_cast<uint32_t>(val);
     }
@@ -564,10 +546,7 @@ inline std::vector<entryv3> deserialize_directory(const std::string_view decompr
     for (size_t i = 0; i < num_entries; i++) {
         const uint64_t val = decode_varint(&t, end);
         if (val > std::numeric_limits<uint32_t>::max()) {
-            if (pmexcept)
-                throw malformed_directory_exception();
-            pmerr = PMERR_MALFORMED_DIRECTORY;
-            return std::vector<entryv3>();
+            PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::vector<entryv3>());
         }
         result[i].length = static_cast<uint32_t>(val);
     }
@@ -577,10 +556,7 @@ inline std::vector<entryv3> deserialize_directory(const std::string_view decompr
 
         if (i > 0 && tmp == 0) {
             if (result[i - 1].offset > std::numeric_limits<uint64_t>::max() - result[i - 1].length) {
-                if (pmexcept)
-                    throw malformed_directory_exception();
-                pmerr = PMERR_MALFORMED_DIRECTORY;
-                return std::vector<entryv3>();
+                PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::vector<entryv3>());
             }
             result[i].offset = result[i - 1].offset + result[i - 1].length;
         } else {
@@ -590,10 +566,7 @@ inline std::vector<entryv3> deserialize_directory(const std::string_view decompr
 
     // assert the directory has been fully consumed
     if (t != end) {
-        if (pmexcept)
-            throw malformed_directory_exception();
-        pmerr = PMERR_MALFORMED_DIRECTORY;
-        return std::vector<entryv3>();
+        PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::vector<entryv3>());
     }
 
     return result;
@@ -675,10 +648,7 @@ inline std::pair<uint64_t, uint32_t> get_tile(const std::function<std::string(co
 
     uint64_t dir_offset = h.root_dir_offset;
     if (h.root_dir_bytes > std::numeric_limits<uint32_t>::max()) {
-        if (pmexcept)
-            throw malformed_directory_exception();
-        pmerr = PMERR_MALFORMED_DIRECTORY;
-        return std::make_pair(0, 0);
+        PMTILES_EXCEPTION(malformed_directory_exception(), PMERR_MALFORMED_DIRECTORY, std::make_pair(0, 0));
     }
     uint32_t dir_length = static_cast<uint32_t>(h.root_dir_bytes);
     for (int depth = 0; depth <= 3; depth++) {
