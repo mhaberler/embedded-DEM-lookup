@@ -23,6 +23,11 @@
 typedef mqtt::buffer_ref<char> buffer_ref;
 typedef mqtt::buffer_ref<uint8_t> blob_ref;
 
+
+static inline size_t blah(size_t s, uint8_t &pmerr = pmtiles::pmerrno) {
+    return s;
+}
+
 buffer_ref bref("blah");
 
 #define MIN_ALLOC_SIZE 8192
@@ -60,7 +65,6 @@ typedef enum {
     PM_OK = 0,
 } pmErrno_t;
 
-int pmerrno;
 
 const char * file_name = PMTILES_PATH;
 
