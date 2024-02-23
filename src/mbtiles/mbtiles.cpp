@@ -5,15 +5,18 @@
 #include <stdarg.h>
 #include <math.h>
 
+#include "logging.hpp"
+#include "util.hpp"
+
 #include "pngle.h"
 
 #include "webp/decode.h"
 #include "webp/encode.h"
 #include "webp/types.h"
 
-#include "logging.hpp"
 #include "mbtiles.hpp"
 #include "slippytiles.hpp"
+
 
 static const char *tileQuery = "SELECT tile_data FROM tiles WHERE"
                                " zoom_level = ? AND tile_column = ? AND tile_row = ?";

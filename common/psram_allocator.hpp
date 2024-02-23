@@ -38,12 +38,15 @@ template <typename T> class allocator {
     }
 
     pointer allocate(size_type n, const void *hint = 0) {
-        LOG_DEBUG("%s %zu", __FUNCTION__, n);
+
 #ifdef ESP32
-        return static_cast<pointer>(heap_caps_malloc(n * sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        void *p = heap_caps_malloc(n * sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-        return static_cast<pointer>(malloc(n * sizeof(T)));
+        void *p = malloc(n * sizeof(T));
 #endif
+        LOG_DEBUG("%s %zu %p", __FUNCTION__, n, p);
+
+        return static_cast<pointer>(p);
     }
 
     void deallocate(pointer p, size_type n) {

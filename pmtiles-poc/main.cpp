@@ -18,6 +18,12 @@
 
 #include "pmtiles.hpp"
 #include "psram_allocator.hpp"
+#include "buffer_ref.h"
+
+typedef mqtt::buffer_ref<char> buffer_ref;
+typedef mqtt::buffer_ref<uint8_t> blob_ref;
+
+buffer_ref bref("blah");
 
 #define MIN_ALLOC_SIZE 8192
 #define MOD_GZIP_ZLIB_WINDOWSIZE 15
@@ -42,20 +48,17 @@ static inline size_t alloc_size(size_t s) {
 using namespace pmtiles;
 using namespace std;
 
+#define PM_MIN -128
 typedef enum {
-    PM_OK = 0,
-    PM_IOBUF_ALLOC_FAILED = -1,
-    PM_SEEK_FAILED = -2,
-    PM_READ_FAILED = -3,
-    PM_DEFLATE_INIT_FAILED = -4,
-    PM_ZLIB_DECOMP_FAILED = -5,
+    PM_IOBUF_ALLOC_FAILED = PM_MIN,
+    PM_SEEK_FAILED,
+    PM_READ_FAILED,
+    PM_DEFLATE_INIT_FAILED,
+    PM_ZLIB_DECOMP_FAILED,
 
+    PM_OK = 0,
 } pmErrno_t;
 
-void *io_buffer;
-size_t io_size;
-esp32::psram::string decomp;
-esp32::psram::string io;
 int pmerrno;
 
 const char * file_name = PMTILES_PATH;
@@ -78,18 +81,18 @@ void on_draw(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uin
     img[offset+2] = rgba[2];
 }
 
-void decodeTile(const void *buffer, size_t size) {
+void decodeTile(const buffer_ref blob) {
     pngle_t *pngle = pngle_new();
 
     pngle_set_init_callback(pngle, on_init);
     pngle_set_draw_callback(pngle, on_draw);
 
-    int fed = pngle_feed(pngle, buffer, size);
+    int fed = pngle_feed(pngle, blob.data(), blob.size());
     if (fed < 0) {
         fprintf(stderr, "%s\n", pngle_error(pngle));
         exit(1);
     }
-    printf("size %u fed %zu\n", size, fed);
+    printf("size %u fed %zu\n", blob.size(), fed);
     uint8_t *img = (uint8_t *) pngle_get_user_data(pngle);
     int x = 27;
     int y = 6;
@@ -111,18 +114,20 @@ bool isNull(const entryv3 &e) {
             (e.length == 0) && (e.run_length == 0));
 }
 
+pmErrno_t decompress_gzip(const string_view str, esp32::psram::string &outstring) {
 
-int32_t decompress_gzip(const string_view str, esp32::psram::string &outstring) {
-    z_stream zs;                        // z_stream is zlib's control structure
-    memset(&zs, 0, sizeof(zs));
+    z_stream zs = {};
+    int32_t rc = inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16);
 
-    if (inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16) != Z_OK)
-        throw(std::runtime_error("inflateInit failed while decompressing."));
+    if (rc != Z_OK) {
+        LOG_ERROR("inflateInit failed");
+        return PM_DEFLATE_INIT_FAILED;
+    }
+    outstring.clear();
 
     zs.next_in = (Bytef*)str.data();
     zs.avail_in = str.size();
 
-    int ret;
     char outbuffer[32768];
 
     // get the decompressed bytes blockwise using repeated calls to inflate
@@ -130,62 +135,69 @@ int32_t decompress_gzip(const string_view str, esp32::psram::string &outstring) 
         zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
         zs.avail_out = sizeof(outbuffer);
 
-        ret = inflate(&zs, 0);
+        rc = inflate(&zs, 0);
 
         if (outstring.size() < zs.total_out) {
             outstring.append(outbuffer,
                              zs.total_out - outstring.size());
         }
 
-    } while (ret == Z_OK);
+    } while (rc == Z_OK);
 
     inflateEnd(&zs);
 
-    if (ret != Z_STREAM_END) {          // an error occurred that was not EOF
-        std::ostringstream oss;
-        oss << "Exception during zlib decompression: (" << ret << ") "
-            << zs.msg;
-        throw(std::runtime_error(oss.str()));
+    if (rc != Z_STREAM_END) {
+        LOG_ERROR("zlib decompression failed : %d", rc);
+        return PM_ZLIB_DECOMP_FAILED;
     }
-
-    return ret;
+    return PM_OK;
 }
 
-void *get_bytes(FILE *fp,
-                off_t start,
-                size_t length,
-                uint8_t compression = COMPRESSION_NONE) {
+static size_t io_size;
+static char *io_buffer;
+
+pmErrno_t get_bytes(FILE *fp,
+                    off_t start,
+                    size_t length,
+                    buffer_ref &result,
+                    uint8_t compression = COMPRESSION_NONE) {
+
+    // if (length > result.capacity()) {
+    //     result.reserve(alloc_size(length));
+    // }
+    // result.clear();
     if (io_size < length) {
         io_size = alloc_size(length);
-        io_buffer = realloc(io_buffer, io_size);
+        io_buffer = (char *)realloc(io_buffer, io_size);
         if (io_buffer == nullptr) {
             LOG_ERROR("realloc %zu failed:  %s", length, strerror(errno));
             pmerrno = PM_IOBUF_ALLOC_FAILED;
             io_size = 0;
-            return nullptr;
+            return PM_IOBUF_ALLOC_FAILED;
         }
     }
+
     off_t ofst = fseek(fp, start, SEEK_SET);
     if (ofst != 0 ) {
         LOG_ERROR("fseek to %zu failed:  %s", start, strerror(errno));
-        pmerrno = PM_SEEK_FAILED;
-        return nullptr;;
+        return PM_SEEK_FAILED;;
     }
     size_t got = fread(io_buffer, 1, length, fp);
     if (got != length) {
         LOG_ERROR("read failed: got %zu of %zu, %s", got, length, strerror(errno));
-        pmerrno = PM_READ_FAILED;
-        return nullptr;;
+        return PM_READ_FAILED;
     }
-    return io_buffer;
+    // result.resize(length);
+    result = buffer_ref(io_buffer, length);
+    return PM_OK;
 }
 
 int main(int argc, char *argv[]) {
     int32_t rc;
 
     set_loglevel(LOG_LEVEL_VERBOSE);
-    setbuf(stdout, NULL);
-
+    setbuf(stdout, nullptr);
+    LOG_INFO("C++ version: %ld", __cplusplus);
     struct stat st;
     if (argc > 1)
         file_name = argv[1];
@@ -204,7 +216,7 @@ int main(int argc, char *argv[]) {
         perror(file_name);
         exit(1);
     }
-    LOG_DEBUG("open '%s' size %zu", file_name, st.st_size);
+    LOG_DEBUG("open '%s' size %jd", file_name, st.st_size);
 
     // test example - knowns:
     //   lat lon
@@ -224,38 +236,53 @@ int main(int argc, char *argv[]) {
     // init w 256 h 256
     // size 79198 fed 79198
     // elevation=863.3
-    decomp.reserve(1024);
-    decomp.reserve(32768);
-    io.reserve(16384);
+    // decomp.reserve(1024);
+
+    bref = "foo";
+    printf("bref %s size %zu\n", bref.c_str(), bref.size());
+
+    string_view x(bref.to_string());
+    string y(bref.to_string());
+
+    printf("x %s size %zu\n", x.data(), x.size());
+
+    esp32::psram::string decomp;
+    // esp32::psram::string io;
+
+    decomp.resize(32768);
+    // io.resize(1024);
+
 
     uint64_t tile_id = zxy_to_tileid(13, 4442, 2877);
     printf("tid %lld\n", tile_id);
-    void *p;
 
-    if ((p = get_bytes(fp, 0, 127)) == nullptr) {
+    buffer_ref io;
+    if ((rc = get_bytes(fp, 0, 127, io)) != PM_OK) {
         perror("get_bytes");
         exit(1);
     }
-    headerv3 header = deserialize_header(string_view(reinterpret_cast<const char *>(p), 127));
+    printf("io.data() %p io.size() %zu\n", io.data(), io.size());
+
+    headerv3 header = deserialize_header(string_view(io.to_string()));
 
     uint64_t dir_offset  = header.root_dir_offset;
     uint64_t dir_length = header.root_dir_bytes;
 
     for (int i = 0; i < 4; i++) {
-        if ((p = get_bytes(fp, dir_offset, dir_length)) == nullptr) {
+        if ((rc = get_bytes(fp, dir_offset, dir_length, io)) != PM_OK) {
             perror("get_bytes");
             break;
         }
 
         std::vector<entryv3> directory;
-        decomp.clear();
+        // decomp.clear();
         if (header.internal_compression == COMPRESSION_GZIP) {
             printf("---- COMPRESSION_GZIP\n");
-
-            rc = decompress_gzip(string_view((char *)p, dir_length), decomp);
+            rc = decompress_gzip(string_view(io.to_string()), decomp);
+            //FIXME rc
             directory = deserialize_directory(string_view(decomp));
         } else {
-            directory = deserialize_directory(string_view((char *)p, dir_length));
+            directory = deserialize_directory(string_view(io.to_string()));
         }
 
         entryv3 result = find_tile(directory,  tile_id);
@@ -265,11 +292,11 @@ int main(int argc, char *argv[]) {
                 dir_offset = header.leaf_dirs_offset + result.offset;
                 dir_length = result.length;
             } else {
-                if ((p = get_bytes(fp, header.tile_data_offset + result.offset, result.length)) == nullptr) {
+                if ((rc = get_bytes(fp, header.tile_data_offset + result.offset, result.length, io)) != PM_OK) {
                     perror("get_bytes");
                     break;
                 }
-                decodeTile(p, result.length);
+                decodeTile(io);
                 break;
             }
         }
