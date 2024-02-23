@@ -55,6 +55,7 @@ typedef enum {
     PM_READ_FAILED,
     PM_DEFLATE_INIT_FAILED,
     PM_ZLIB_DECOMP_FAILED,
+    PM_DECOMP_BUF_ALLOC_FAILED,
 
     PM_OK = 0,
 } pmErrno_t;
@@ -114,7 +115,24 @@ bool isNull(const entryv3 &e) {
             (e.length == 0) && (e.run_length == 0));
 }
 
-pmErrno_t decompress_gzip(const string_view str, esp32::psram::string &outstring) {
+static size_t decomp_size;
+static char *decomp_buffer;
+
+#define GUESS 2
+pmErrno_t decompress_gzip(const string_view str, buffer_ref &out) {
+
+    if (decomp_size < str.size()) {
+        decomp_size = alloc_size(str.size() * GUESS);
+        decomp_buffer = (char *)realloc(decomp_buffer, decomp_size);
+        if (decomp_buffer == nullptr) {
+            LOG_ERROR("realloc %zu -> %zu failed:  %s", str.size(), decomp_size, strerror(errno));
+            pmerrno = PM_DECOMP_BUF_ALLOC_FAILED;
+            if (decomp_buffer)
+                free(decomp_buffer);
+            decomp_size = 0;
+            return PM_DECOMP_BUF_ALLOC_FAILED;
+        }
+    }
 
     z_stream zs = {};
     int32_t rc = inflateInit2(&zs, MOD_GZIP_ZLIB_WINDOWSIZE + 16);
@@ -123,23 +141,21 @@ pmErrno_t decompress_gzip(const string_view str, esp32::psram::string &outstring
         LOG_ERROR("inflateInit failed");
         return PM_DEFLATE_INIT_FAILED;
     }
-    outstring.clear();
 
     zs.next_in = (Bytef*)str.data();
     zs.avail_in = str.size();
 
-    char outbuffer[32768];
-
-    // get the decompressed bytes blockwise using repeated calls to inflate
+    size_t current = 0;
     do {
-        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
-        zs.avail_out = sizeof(outbuffer);
+        zs.next_out = reinterpret_cast<Bytef*>(decomp_buffer + zs.total_out);
+        zs.avail_out = decomp_size - zs.total_out;
 
         rc = inflate(&zs, 0);
 
-        if (outstring.size() < zs.total_out) {
-            outstring.append(outbuffer,
-                             zs.total_out - outstring.size());
+        if (decomp_size <= zs.total_out) {
+            LOG_ERROR("---- BANG");
+            decomp_size = alloc_size(zs.total_out*2);
+            decomp_buffer = (char *)realloc(decomp_buffer, decomp_size);
         }
 
     } while (rc == Z_OK);
@@ -150,6 +166,7 @@ pmErrno_t decompress_gzip(const string_view str, esp32::psram::string &outstring
         LOG_ERROR("zlib decompression failed : %d", rc);
         return PM_ZLIB_DECOMP_FAILED;
     }
+    out = buffer_ref(decomp_buffer, zs.total_out);
     return PM_OK;
 }
 
@@ -162,10 +179,6 @@ pmErrno_t get_bytes(FILE *fp,
                     buffer_ref &result,
                     uint8_t compression = COMPRESSION_NONE) {
 
-    // if (length > result.capacity()) {
-    //     result.reserve(alloc_size(length));
-    // }
-    // result.clear();
     if (io_size < length) {
         io_size = alloc_size(length);
         io_buffer = (char *)realloc(io_buffer, io_size);
@@ -246,12 +259,11 @@ int main(int argc, char *argv[]) {
 
     printf("x %s size %zu\n", x.data(), x.size());
 
-    esp32::psram::string decomp;
-    // esp32::psram::string io;
+    // esp32::psram::string decomp;
+    // // esp32::psram::string io;
 
-    decomp.resize(32768);
+    // decomp.resize(32768);
     // io.resize(1024);
-
 
     uint64_t tile_id = zxy_to_tileid(13, 4442, 2877);
     printf("tid %lld\n", tile_id);
@@ -267,6 +279,7 @@ int main(int argc, char *argv[]) {
 
     uint64_t dir_offset  = header.root_dir_offset;
     uint64_t dir_length = header.root_dir_bytes;
+    buffer_ref decomp;
 
     for (int i = 0; i < 4; i++) {
         if ((rc = get_bytes(fp, dir_offset, dir_length, io)) != PM_OK) {
@@ -280,9 +293,10 @@ int main(int argc, char *argv[]) {
             printf("---- COMPRESSION_GZIP\n");
             rc = decompress_gzip(string_view(io.to_string()), decomp);
             //FIXME rc
-            directory = deserialize_directory(string_view(decomp));
+            // directory = deserialize_directory(string_view(decomp.to_string()));
+            directory = deserialize_directory(decomp.to_string());
         } else {
-            directory = deserialize_directory(string_view(io.to_string()));
+            directory = deserialize_directory(io.to_string());
         }
 
         entryv3 result = find_tile(directory,  tile_id);
